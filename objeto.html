@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'">
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; }
+  canvas { display: block; }
+  canvas.clic { cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// Un solo archivo dibuja varios objetos según ?tipo=agua | cama | charco | laser
+const QS = new URLSearchParams(location.search);
+const TIPO = QS.get('tipo'), ITEM = QS.get('item') || 'hoja';
+const TAM = { agua: [70, 40], cama: [250, 64], charco: [70, 26], laser: [24, 24], regalo: [46, 34] }[TIPO];
+const canvas = document.getElementById('c');
+canvas.width = TAM[0]; canvas.height = TAM[1];
+const ctx = canvas.getContext('2d');
+const o = window.objeto;
+let datos = { nivel: 100, decoracion: null }, frame = 0;
+
+function elipse(cx, cy, rx, ry, relleno, borde) {
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fillStyle = relleno; ctx.fill();
+  if (borde) { ctx.strokeStyle = borde; ctx.lineWidth = 2; ctx.stroke(); }
+}
+
+function bebedero() {
+  // Plato azul con agua que baja de nivel
+  ctx.beginPath();
+  ctx.moveTo(6, 22); ctx.lineTo(64, 22); ctx.lineTo(57, 38); ctx.lineTo(13, 38); ctx.closePath();
+  ctx.fillStyle = '#2b7bd6'; ctx.fill(); ctx.strokeStyle = '#1b4f8c'; ctx.lineWidth = 2; ctx.stroke();
+  elipse(35, 22, 29, 5, '#2468b8', '#1b4f8c');
+  if (datos.nivel > 0) {
+    const ola = Math.sin(frame / 20) * 0.6;
+    elipse(35, 22, 25 * Math.min(1, 0.4 + datos.nivel / 160), 3 + ola, 'rgba(160,215,255,0.95)', null);
+  }
+  if (datos.nivel <= 0) {
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 10px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('clic 💧', 35, 14);
+  }
+}
+
+function camita() {
+  // Cojín ovalado con borde acolchado
+  elipse(95, 50, 90, 12, '#7a3b2e', '#4f241b');                         // camita más grande: caben las dos
+  elipse(95, 46, 85, 10, '#c0634f', '#7a3b2e');
+  elipse(95, 47, 68, 6, '#e8a48f', null);
+  // Decoración según la fecha
+  const d = datos.decoracion;
+  if (d === 'calabaza') {
+    elipse(222, 48, 18, 14, '#f28c28', '#b85c0f');
+    ctx.strokeStyle = '#b85c0f'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(222, 35); ctx.lineTo(222, 61); ctx.stroke();
+    ctx.fillStyle = '#4a7a2a'; ctx.fillRect(220, 30, 4, 7);
+    // cara de calabaza con lucecita
+    ctx.fillStyle = frame % 60 < 50 ? '#ffd23f' : '#ffb000';
+    [[215, 44], [229, 44]].forEach(([x, y]) => { ctx.beginPath(); ctx.moveTo(x - 3, y + 2); ctx.lineTo(x + 3, y + 2); ctx.lineTo(x, y - 3); ctx.fill(); });
+    ctx.beginPath(); ctx.moveTo(213, 51); ctx.lineTo(231, 51); ctx.lineTo(228, 55); ctx.lineTo(216, 55); ctx.closePath(); ctx.fill();
+  } else if (d === 'regalo') {
+    ctx.fillStyle = '#2e8b57'; ctx.fillRect(208, 36, 28, 24);
+    ctx.fillStyle = '#d62828'; ctx.fillRect(219, 36, 6, 24); ctx.fillRect(208, 45, 28, 6);
+  } else if (d === 'pastel') {
+    ctx.fillStyle = '#f7c5d5'; ctx.fillRect(206, 42, 34, 18);
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(206, 40, 34, 5);
+    ctx.fillStyle = '#5bc0eb'; ctx.fillRect(221, 28, 4, 12);
+    elipse(223, 25 + Math.sin(frame / 6), 2.5, 4, '#ffb000', null);
+  }
+}
+
+function charquito() {
+  elipse(35, 16, 30, 8, 'rgba(232,200,60,0.75)', 'rgba(180,150,30,0.8)');
+  elipse(52, 12, 8, 3, 'rgba(232,200,60,0.75)', null);
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 9px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('clic para limpiar', 35, 8);
+}
+
+function puntoLaser() {
+  const g = ctx.createRadialGradient(12, 12, 1, 12, 12, 11);
+  g.addColorStop(0, 'rgba(255,40,40,1)'); g.addColorStop(0.4, 'rgba(255,0,0,0.8)'); g.addColorStop(1, 'rgba(255,0,0,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(12, 12, 11, 0, Math.PI * 2); ctx.fill();
+}
+
+// Regalitos que te traen: hoja, palito o flor (con un brillo para que los notes)
+function dibujarRegalo(item, cx, cy, escala = 1, conBrillo = true) {
+  ctx.save(); ctx.translate(cx, cy); ctx.scale(escala, escala);
+  if (item === 'hoja') {
+    ctx.rotate(-0.4);
+    const g = ctx.createLinearGradient(-12, 0, 12, 0); g.addColorStop(0, '#e8892b'); g.addColorStop(1, '#c4561a');
+    ctx.beginPath(); ctx.moveTo(-13, 0); ctx.quadraticCurveTo(-2, -10, 12, 0); ctx.quadraticCurveTo(-2, 10, -13, 0);
+    ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = '#7a3410'; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-15, 1); ctx.lineTo(11, 0); ctx.strokeStyle = '#7a3410'; ctx.lineWidth = 1; ctx.stroke();
+    [-6, 0, 5].forEach(px => { ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px + 4, -5); ctx.moveTo(px, 0); ctx.lineTo(px + 4, 5); ctx.stroke(); });
+  } else if (item === 'palito') {
+    ctx.rotate(-0.15); ctx.lineCap = 'round';
+    ctx.strokeStyle = '#5a3a1c'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(-16, 2); ctx.lineTo(16, -2); ctx.stroke();
+    ctx.strokeStyle = '#8b5e34'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(-16, 2); ctx.lineTo(16, -2); ctx.stroke();
+    ctx.strokeStyle = '#8b5e34'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(4, -1); ctx.lineTo(10, -8); ctx.stroke();
+    ctx.fillStyle = '#6aa84f'; ctx.beginPath(); ctx.ellipse(12, -9, 4, 2, -0.6, 0, Math.PI * 2); ctx.fill();
+  } else {                                                              // flor
+    ctx.strokeStyle = '#4a8a2a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, 2); ctx.quadraticCurveTo(-6, 9, -12, 11); ctx.stroke();
+    ctx.fillStyle = '#5fa83a'; ctx.beginPath(); ctx.ellipse(-7, 9, 3.5, 1.8, 0.5, 0, Math.PI * 2); ctx.fill();
+    for (let k = 0; k < 6; k++) {
+      const a = k * Math.PI / 3;
+      ctx.beginPath(); ctx.ellipse(Math.cos(a) * 5, Math.sin(a) * 5 - 2, 4.2, 2.6, a, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff8fb8'; ctx.fill(); ctx.strokeStyle = '#d0507e'; ctx.lineWidth = 0.8; ctx.stroke();
+    }
+    ctx.beginPath(); ctx.arc(0, -2, 3, 0, Math.PI * 2); ctx.fillStyle = '#ffd23f'; ctx.fill();
+  }
+  ctx.restore();
+  if (conBrillo) {                                                      // destellito
+    const t = frame / 20, a = (Math.sin(t) + 1) / 2;
+    ctx.save(); ctx.globalAlpha = 0.4 + a * 0.6; ctx.fillStyle = '#fff6b0'; ctx.font = `${9 + a * 3}px sans-serif`;
+    ctx.fillText('✦', cx + 12, cy - 9); ctx.restore();
+  }
+}
+
+function ciclo() {
+  frame++;
+  ctx.clearRect(0, 0, TAM[0], TAM[1]);
+  if (TIPO === 'agua') bebedero();
+  else if (TIPO === 'cama') camita();
+  else if (TIPO === 'charco') charquito();
+  else if (TIPO === 'laser') puntoLaser();
+  else if (TIPO === 'regalo') dibujarRegalo(ITEM, 22, 20);
+  requestAnimationFrame(ciclo);
+}
+
+if (TIPO === 'agua' || TIPO === 'charco' || TIPO === 'regalo') {
+  canvas.classList.add('clic');
+  canvas.addEventListener('click', () => o.clic(TIPO));
+}
+o.on('datos', d => { datos = { ...datos, ...d }; });
+requestAnimationFrame(ciclo);
+</script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'">
+<style> html, body { margin: 0; background: transparent; overflow: hidden; } canvas { display: block; } </style>
+</head>
+<body>
+<canvas id="c" width="80" height="44"></canvas>
+<script>
+const ctx = document.getElementById('c').getContext('2d');
+let porciones = 1, total = 1;
+
+// Croquetas con posiciones fijas para que no "brinquen" al redibujar
+const CROQUETAS = Array.from({ length: 16 }, (_, i) => ({
+  x: 18 + ((i * 37) % 44), y: 24 - (i % 3) * 3 - Math.floor(i / 8) * 3, r: 3 + (i % 2)
+}));
+
+function dibujar() {
+  ctx.clearRect(0, 0, 80, 44);
+  const cuantas = Math.round(CROQUETAS.length * porciones / total);
+  CROQUETAS.slice(0, cuantas).forEach(c => {
+    ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+    ctx.fillStyle = '#8b5a2b'; ctx.fill();
+    ctx.strokeStyle = '#5e3a17'; ctx.lineWidth = 1; ctx.stroke();
+  });
+  // Plato rojo
+  ctx.beginPath();
+  ctx.moveTo(6, 26); ctx.lineTo(74, 26); ctx.lineTo(66, 42); ctx.lineTo(14, 42); ctx.closePath();
+  ctx.fillStyle = '#d7263d'; ctx.fill();
+  ctx.strokeStyle = '#8f1526'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(40, 26, 34, 4, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#b81f33'; ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 9px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('🐾', 40, 38);
+}
+window.objeto.on('porciones', p => { porciones = p.porciones; total = p.total; dibujar(); });
+dibujar();
+</script>
+</body>
+</html>

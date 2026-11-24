@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'">
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; }
+  canvas { display: block; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+</style>
+</head>
+<body>
+<canvas id="c" width="64" height="64"></canvas>
+<script>
+// Pelota de tenis con física sencilla: gravedad, rebote y rodar.
+const T = 64, R = 13, G = 0.6, PASO = 1000 / 60;
+const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+const o = window.objeto;
+let displays = [], cx = 0, cy = 0, vx = 0, vy = 0, giro = 0, enSuelo = false;
+let arrastre = false, ultimoT = null, acumulado = 0, n = 0, ultimaPos = '';
+
+function pantalla(px) {
+  return displays.find(d => px >= d.x && px < d.x + d.width) ||
+    displays.reduce((m, d) => !m || Math.abs(d.x + d.width / 2 - px) < Math.abs(m.x + m.width / 2 - px) ? d : m, null);
+}
+const izq = () => Math.min(...displays.map(d => d.x)) + R;
+const der = () => Math.max(...displays.map(d => d.x + d.width)) - R;
+
+function paso() {
+  if (arrastre) return;
+  const d = pantalla(cx);
+  const piso = d.y + d.height - R - 2;
+  vy += G; cx += vx; cy += vy;
+  if (cy >= piso) {
+    cy = piso;
+    if (Math.abs(vy) > 2) { vy *= -0.55; vx *= 0.85; } else vy = 0;
+  }
+  if (cy < d.y + R) { cy = d.y + R; vy = Math.abs(vy) * 0.5; }
+  if (cx < izq()) { cx = izq(); vx = Math.abs(vx) * 0.7; }
+  if (cx > der()) { cx = der(); vx = -Math.abs(vx) * 0.7; }
+  enSuelo = cy >= piso - 0.5 && vy === 0;
+  if (enSuelo) { vx *= 0.97; if (Math.abs(vx) < 0.05) vx = 0; }
+  giro += vx / R;
+}
+
+function dibujar() {
+  ctx.clearRect(0, 0, T, T);
+  ctx.save(); ctx.translate(T / 2, T / 2); ctx.rotate(giro);
+  ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2);
+  ctx.fillStyle = '#d4ec4a'; ctx.fill();
+  ctx.strokeStyle = '#8fa51f'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(-R * 1.05, 0, R * 0.75, -0.9, 0.9); ctx.stroke();
+  ctx.beginPath(); ctx.arc(R * 1.05, 0, R * 0.75, Math.PI - 0.9, Math.PI + 0.9); ctx.stroke();
+  ctx.restore();
+}
+
+function ciclo(t) {
+  if (ultimoT === null) ultimoT = t;
+  acumulado += Math.min(t - ultimoT, 250); ultimoT = t;
+  while (acumulado >= PASO) { paso(); acumulado -= PASO; }
+  const pos = Math.round(cx) + ',' + Math.round(cy);
+  if (!arrastre && pos !== ultimaPos) { o.mover(cx - T / 2, cy - T / 2); ultimaPos = pos; }
+  if (!arrastre && ++n % 6 === 0) o.estado({ x: cx, y: cy, vx, vy, enSuelo });
+  dibujar();
+  requestAnimationFrame(ciclo);
+}
+
+// Arrastrar y aventar: mientras la cargas, el proceso principal la pega al cursor.
+// Al soltarla (o si el mouse se sale de la pelota por ir muy rápido) sale disparada.
+canvas.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  arrastre = true; vx = vy = 0;
+  o.arrastrar({ ox: e.clientX, oy: e.clientY });
+});
+function terminar() { if (!arrastre) return; arrastre = false; ultimaPos = ''; o.fin(); }
+canvas.addEventListener('pointerup', terminar);
+canvas.addEventListener('pointerleave', terminar);
+window.addEventListener('blur', terminar);
+
+o.on('soltar', p => { arrastre = false; cx = p.x; cy = p.y; vx = p.vx || 0; vy = p.vy ?? -2; ultimaPos = ''; });
+o.on('pantallas', p => { displays = p; });
+
+o.pantallas().then(p => {
+  displays = p;
+  // la posición inicial la pone el proceso principal al crear la ventana
+  cx = window.screenX + T / 2; cy = window.screenY + T / 2;
+  requestAnimationFrame(ciclo);
+});
+</script>
+</body>
+</html>

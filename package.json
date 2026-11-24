@@ -1,0 +1,63 @@
+{
+  "name": "mascota-perro",
+  "version": "3.15.0",
+  "description": "Perrito de escritorio con IA",
+  "main": "main.js",
+  "author": "Fernando",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win",
+    "publicar": "electron-builder --win --publish always",
+    "dist:mac": "electron-builder --mac --universal --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.fernando.perrito",
+    "productName": "Perrito",
+    "files": [
+      "*.js",
+      "*.html",
+      "*.png",
+      "sprites/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false,
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Ferchonchon",
+      "repo": "perrito",
+      "releaseType": "release"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg"
+        },
+        {
+          "target": "zip"
+        }
+      ],
+      "category": "public.app-category.entertainment",
+      "icon": "icon.png",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "Perrito ${version}"
+    }
+  }
+}

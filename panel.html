@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'">
+<style>
+  :root {
+    --fondo: #1d1b1a; --capa: #292523; --linea: #3a3431;
+    --texto: #f1ece6; --suave: #a39a92; --cafe: #9a5a2b; --cafe-claro: #c98a52; --lengua: #ff7a8a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--fondo); color: var(--texto);
+    font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; border: 1px solid var(--linea); border-radius: 12px; overflow: hidden; }
+
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; -webkit-app-region: drag; }
+  header .huella { width: 30px; height: 30px; border-radius: 50%; background: var(--cafe);
+    display: grid; place-items: center; font-size: 16px; }
+  header h1 { font-size: 16px; font-weight: 600; margin: 0; flex: 1; }
+  header button { -webkit-app-region: no-drag; background: none; border: 0; color: var(--suave);
+    font-size: 18px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+  header button:hover { color: var(--texto); background: var(--capa); }
+
+  nav { display: flex; gap: 4px; margin: 0 14px; padding: 4px; background: var(--capa); border-radius: 10px; }
+  nav button { flex: 1; background: none; border: 0; color: var(--suave); padding: 7px 4px; border-radius: 7px; font-size: 13px;
+    font: inherit; cursor: pointer; }
+  nav button.activa { background: var(--cafe); color: #fff; }
+
+  main { flex: 1; overflow: hidden; padding: 12px 14px 14px; display: flex; flex-direction: column; }
+  section { display: none; flex: 1; flex-direction: column; min-height: 0; }
+  section.activa { display: flex; }
+  #ajustes, #pendientes, #memoria { overflow-y: auto; padding-right: 4px; }
+
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--linea); border-radius: 4px; }
+
+  /* Chat */
+  #mensajes { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
+  .msg { max-width: 85%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.perro { background: var(--capa); align-self: flex-start; border-bottom-left-radius: 4px; }
+  .msg.yo { background: var(--cafe); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .msg.error { background: #3a2222; color: #ffb3b3; align-self: stretch; max-width: none; font-size: 13px; }
+  .vacio { color: var(--suave); text-align: center; margin: auto; padding: 0 20px; }
+
+  .fila { display: flex; gap: 8px; margin-top: 10px; }
+  input, select { width: 100%; min-width: 0; background: var(--capa); border: 1px solid var(--linea); color: var(--texto);
+    padding: 9px 11px; border-radius: 9px; font: inherit; }
+  .fila input, .fila select { flex: 1; width: auto; }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--cafe-claro); outline-offset: 1px; }
+  .boton { background: var(--cafe); color: #fff; border: 0; padding: 9px 14px; border-radius: 9px;
+    font: inherit; font-weight: 600; cursor: pointer; }
+  .boton:hover { background: var(--cafe-claro); }
+  .boton:disabled { opacity: .5; cursor: default; }
+
+  /* Recordatorios */
+  label { display: block; color: var(--suave); font-size: 13px; margin: 12px 0 5px; }
+  label:first-child { margin-top: 0; }
+  .lista { list-style: none; padding: 0; margin: 14px 0 0; overflow-y: auto; flex: 1; }
+  .lista li { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--linea); }
+  .lista .hora { color: var(--cafe-claro); font-variant-numeric: tabular-nums; font-weight: 600; min-width: 46px; }
+  .lista .txt { flex: 1; }
+  .lista button { background: none; border: 0; color: var(--suave); cursor: pointer; font-size: 15px; }
+  .lista button:hover { color: var(--lengua); }
+
+  .msg.accion { background: none; border: 1px dashed var(--linea); color: var(--cafe-claro); font-size: 12px;
+    align-self: flex-start; padding: 5px 9px; }
+  .lista .fecha { color: var(--suave); font-size: 12px; min-width: 70px; }
+  .explica { color: var(--suave); font-size: 13px; margin: 0 0 10px; }
+  label.check { display: flex; align-items: center; gap: 8px; color: var(--texto); margin-top: 12px; cursor: pointer; }
+  label.check input { width: auto; accent-color: var(--cafe); }
+  .dos { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+
+  /* Ajustes */
+  .nota { color: var(--suave); font-size: 12px; margin: 5px 0 0; }
+  #estadoGuardado { color: var(--cafe-claro); font-size: 13px; align-self: center; }
+</style>
+</head>
+<body>
+<header>
+  <div class="huella">🐾</div>
+  <h1 id="titulo">Chispa</h1>
+  <button id="cerrar" title="Cerrar">✕</button>
+</header>
+<nav>
+  <button data-p="chat">Platicar</button>
+  <button data-p="pendientes">Pendientes</button>
+  <button data-p="memoria">Memoria</button>
+  <button data-p="ajustes">Ajustes</button>
+</nav>
+<main>
+  <section id="chat">
+    <div id="mensajes"></div>
+    <div class="fila">
+      <input id="entrada" placeholder="Ej. recuérdame mañana a las 10 pagar la luz" autocomplete="off">
+      <button class="boton" id="enviar">Enviar</button>
+    </div>
+  </section>
+
+  <section id="pendientes">
+    <p class="explica">También puedes pedírselos en el chat, con fecha y hora.</p>
+    <label for="rTexto">¿Qué te recuerdo?</label>
+    <input id="rTexto" placeholder="Ej. Llamar al proveedor">
+    <label for="rMin">¿En cuánto tiempo?</label>
+    <div class="fila" style="margin-top:0">
+      <select id="rMin">
+        <option value="5">5 minutos</option><option value="10">10 minutos</option>
+        <option value="15">15 minutos</option><option value="30" selected>30 minutos</option>
+        <option value="60">1 hora</option><option value="120">2 horas</option>
+        <option value="otro">Otro…</option>
+      </select>
+      <input id="rOtro" type="number" min="1" placeholder="min" style="display:none; max-width:80px">
+    </div>
+    <div class="fila"><button class="boton" id="rGuardar" style="flex:1">Recordarme</button></div>
+    <ul class="lista" id="listaRec"></ul>
+  </section>
+
+  <section id="memoria">
+    <p class="explica" id="explicaMemoria">Solo guarda lo importante que le cuentas. Puedes borrar lo que quieras.</p>
+    <div class="fila" style="margin-top:0">
+      <input id="mTexto" placeholder="Ej. Mi cumpleaños es el 12 de mayo">
+      <button class="boton" id="mGuardar">Guardar</button>
+    </div>
+    <ul class="lista" id="listaMem"></ul>
+    <label style="margin-top:16px">Sus recuerdos</label>
+    <ul class="lista" id="listaRecuerdos"></ul>
+  </section>
+
+  <section id="ajustes">
+    <label for="aDueno">Tu nombre</label>
+    <input id="aDueno" maxlength="40">
+    <div class="dos">
+      <div><label for="aNombre">Perrito</label><input id="aNombre" maxlength="30"></div>
+      <div><label for="aAmigo">Su amigo</label><input id="aAmigo" maxlength="30"></div>
+    </div>
+    <label for="aKey">API key de DeepSeek</label>
+    <input id="aKey" type="password" autocomplete="off">
+    <p class="nota">Se guarda cifrada en tu compu. Vacía = conservar la actual.</p>
+    <label for="aModelo">Modelo</label>
+    <select id="aModelo">
+      <option value="deepseek-flash">deepseek-flash (rápido y barato)</option>
+      <option value="deepseek-v4-pro">deepseek-v4-pro (más listo)</option>
+    </select>
+    <label for="aTamano">Tamaño de las perritas</label>
+    <select id="aTamano">
+      <option value="1">Normales</option>
+      <option value="0.8">Medianas</option>
+      <option value="0.65">Chiquitas</option>
+    </select>
+    <label for="aCiudad">Ciudad para el clima</label>
+    <input id="aCiudad" maxlength="60">
+    <label for="aAccesorio">Accesorio</label>
+    <select id="aAccesorio">
+      <option value="auto">Automático según la fecha</option>
+      <option value="collar">Collar</option>
+      <option value="paliacate">Paliacate</option>
+      <option value="patrio">Paliacate de Fiestas Patrias</option>
+      <option value="muertos">Corona de cempasúchil</option>
+      <option value="navidad">Gorro de Navidad</option>
+      <option value="halloween">Halloween (bruja y calabaza)</option>
+      <option value="ninguno">Ninguno</option>
+    </select>
+    <div class="dos">
+      <div><label for="aAgua">Aviso de agua (min)</label><input id="aAgua" type="number" min="0"></div>
+      <div><label for="aIdle">Se duerme tras (min)</label><input id="aIdle" type="number" min="1"></div>
+    </div>
+    <p class="nota">Agua en 0 = nunca avisar.</p>
+    <label for="aComentarios">Que Nala me diga cosas con IA</label>
+    <select id="aComentarios">
+      <option value="0">Nunca</option>
+      <option value="30">Cada 30 minutos</option>
+      <option value="60">Cada hora</option>
+      <option value="120">Cada 2 horas</option>
+      <option value="240">Cada 4 horas</option>
+    </select>
+    <label class="check"><input type="checkbox" id="aResumen"> Resumen de la mañana (pendientes y clima)</label>
+    <label class="check"><input type="checkbox" id="aNecesidades"> Que pidan salir al baño</label>
+    <label class="check"><input type="checkbox" id="aHora"> Reacciones a la hora (bostezos, paseo, comida)</label>
+    <label for="aComida">Tu hora de comida</label>
+    <input id="aComida" type="time">
+    <div class="dos">
+      <div><label for="aCumpleNala" id="lCumpleNala">Cumpleaños de Nala</label><input id="aCumpleNala" placeholder="DD/MM" maxlength="5"></div>
+      <div><label for="aCumpleDona" id="lCumpleDona">Cumpleaños de Dona</label><input id="aCumpleDona" placeholder="DD/MM" maxlength="5"></div>
+    </div>
+    <div class="fila">
+      <button class="boton" id="aGuardar">Guardar</button>
+      <span id="estadoGuardado"></span>
+    </div>
+  </section>
+</main>
+<script>
+const p = window.panel;
+const $ = id => document.getElementById(id);
+let config = {};
+
+// ---------------- Pestañas ----------------
+function mostrar(nombre) {
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('activa', b.dataset.p === nombre));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('activa', s.id === nombre));
+  if (nombre === 'chat') $('entrada').focus();
+  if (nombre === 'pendientes') $('rTexto').focus();
+  if (nombre === 'memoria') pintarRecuerdos();
+}
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => mostrar(b.dataset.p));
+p.on('pestana', mostrar);
+$('cerrar').onclick = () => p.cerrar();
+
+// ---------------- Chat ----------------
+function agregar(texto, quien) {
+  const vacio = document.querySelector('.vacio'); if (vacio) vacio.remove();
+  const div = document.createElement('div');
+  div.className = 'msg ' + quien; div.textContent = texto;
+  $('mensajes').appendChild(div);
+  $('mensajes').scrollTop = $('mensajes').scrollHeight;
+  return div;
+}
+async function enviar() {
+  const texto = $('entrada').value.trim();
+  if (!texto) return;
+  $('entrada').value = ''; $('enviar').disabled = true;
+  agregar(texto, 'yo');
+  const pensando = agregar('…', 'perro');
+  const r = await p.chat(texto);
+  pensando.remove();
+  if (r.error) agregar(r.error, 'error');
+  else {
+    agregar(r.texto, 'perro');
+    (r.acciones || []).forEach(a => agregar('✓ ' + a, 'accion'));
+  }
+  $('enviar').disabled = false; $('entrada').focus();
+}
+$('enviar').onclick = enviar;
+$('entrada').addEventListener('keydown', e => { if (e.key === 'Enter') enviar(); });
+
+// ---------------- Pendientes ----------------
+const DIAS = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
+function cuando(ms) {
+  const d = new Date(ms), hoy = new Date();
+  const h = `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return d.toDateString() === hoy.toDateString() ? h : `${DIAS[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1} ${h}`;
+}
+function pintarRecordatorios(lista) {
+  const ul = $('listaRec'); ul.innerHTML = '';
+  if (!lista.length) { ul.innerHTML = '<li class="vacia" style="color:var(--suave)">Sin pendientes 🐾</li>'; return; }
+  lista.forEach(r => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="hora"></span><span class="txt"></span><button title="Borrar">✕</button>';
+    li.querySelector('.hora').textContent = cuando(r.cuando);
+    li.querySelector('.txt').textContent = r.texto;
+    li.querySelector('button').onclick = async () => pintarRecordatorios(await p.borrarRecordatorio(r.id));
+    ul.appendChild(li);
+  });
+}
+$('rMin').onchange = () => { $('rOtro').style.display = $('rMin').value === 'otro' ? '' : 'none'; };
+$('rGuardar').onclick = async () => {
+  const texto = $('rTexto').value.trim();
+  if (!texto) { $('rTexto').focus(); return; }
+  const minutos = $('rMin').value === 'otro' ? Number($('rOtro').value) : Number($('rMin').value);
+  if (!minutos || minutos < 1) { $('rOtro').focus(); return; }
+  pintarRecordatorios(await p.nuevoRecordatorio({ texto, minutos }));
+  $('rTexto').value = '';
+};
+
+// ---------------- Memoria ----------------
+function pintarMemoria(lista) {
+  const ul = $('listaMem'); ul.innerHTML = '';
+  if (!lista.length) { ul.innerHTML = '<li style="color:var(--suave)">Todavía no recuerda nada.</li>'; return; }
+  lista.forEach((m, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="txt"></span><button title="Olvidar">✕</button>';
+    li.querySelector('.txt').textContent = m.texto;
+    li.querySelector('button').onclick = async () => pintarMemoria(await p.borrarMemoria(i));
+    ul.appendChild(li);
+  });
+}
+$('mGuardar').onclick = async () => {
+  const t = $('mTexto').value.trim();
+  if (!t) { $('mTexto').focus(); return; }
+  pintarMemoria(await p.nuevaMemoria(t));
+  $('mTexto').value = '';
+};
+$('mTexto').addEventListener('keydown', e => { if (e.key === 'Enter') $('mGuardar').click(); });
+p.on('datos-actualizados', d => { pintarRecordatorios(d.recordatorios); pintarMemoria(d.memoria); });
+const JUGUETES = { pelota: 'la pelota 🎾', hueso: 'el huesito 🦴', cuerda: 'la cuerda 🪢', laser: 'el láser 🔴' };
+async function pintarRecuerdos() {
+  const r = await p.recuerdos();
+  const ul = $('listaRecuerdos'); ul.innerHTML = '';
+  const filas = [`Llevan ${r.horas} horas juntos 🕒`];
+  r.perros.forEach(d => {
+    filas.push(`${d.nombre}: ${d.caricias} caricias, ${d.paseos} paseos, ${d.trucos} trucos, ${d.banos} baños`);
+    filas.push(`${d.nombre}: juguete favorito ${d.favorito ? JUGUETES[d.favorito] : '— todavía ninguno'}${d.peso > 40 ? ' · está gordita 🍪' : ''}${d.suciedad > 60 ? ' · necesita baño 🛁' : ''}`);
+  });
+  filas.forEach(t => { const li = document.createElement('li'); li.innerHTML = '<span class="txt"></span>'; li.querySelector('.txt').textContent = t; ul.appendChild(li); });
+}
+
+// ---------------- Ajustes ----------------
+function pintarAjustes() {
+  $('titulo').textContent = config.nombre;
+  $('aDueno').value = config.dueno || '';
+  $('aNombre').value = config.nombre;
+  $('aAmigo').value = config.nombreAmigo;
+  $('aKey').placeholder = config.tieneApiKey ? 'Guardada ✓' : 'sk-…';
+  if (![...$('aModelo').options].some(o => o.value === config.modelo)) $('aModelo').add(new Option(config.modelo, config.modelo));
+  $('aModelo').value = config.modelo;
+  $('aCiudad').value = config.ciudad || '';
+  $('aAccesorio').value = config.accesorio || 'auto';
+  $('aAgua').value = config.aguaCadaMin;
+  $('aIdle').value = config.inactividadMin;
+  const op = $('aComentarios');
+  if (![...op.options].some(o => Number(o.value) === config.comentariosMin)) op.add(new Option(`Cada ${config.comentariosMin} min`, config.comentariosMin));
+  op.value = String(config.comentariosMin);
+  $('aResumen').checked = config.resumenManana !== false;
+  $('aNecesidades').checked = config.necesidades !== false;
+  $('aHora').checked = config.reaccionesHora !== false;
+  $('aTamano').value = String([1, 0.8, 0.65].reduce((m, v) => Math.abs(v - (config.tamano || 1)) < Math.abs(m - (config.tamano || 1)) ? v : m, 1));
+  $('aComida').value = (config.horaComida || '14:00').padStart(5, '0');
+  $('aCumpleNala').value = config.cumpleNala || '';
+  $('aCumpleDona').value = config.cumpleDona || '';
+  $('lCumpleNala').textContent = `Cumpleaños de ${config.nombre}`;
+  $('lCumpleDona').textContent = `Cumpleaños de ${config.nombreAmigo}`;
+  document.querySelector('label[for="aComentarios"]').textContent = `Que ${config.nombre} me diga cosas con IA`;
+}
+$('aGuardar').onclick = async () => {
+  $('aGuardar').disabled = true;
+  config = await p.guardar({
+    dueno: $('aDueno').value, nombre: $('aNombre').value, nombreAmigo: $('aAmigo').value,
+    apiKey: $('aKey').value, modelo: $('aModelo').value, ciudad: $('aCiudad').value,
+    accesorio: $('aAccesorio').value,
+    aguaCadaMin: Number($('aAgua').value), inactividadMin: Number($('aIdle').value),
+    comentariosMin: Number($('aComentarios').value), resumenManana: $('aResumen').checked,
+    necesidades: $('aNecesidades').checked,
+    reaccionesHora: $('aHora').checked, horaComida: $('aComida').value,
+    tamano: Number($('aTamano').value),
+    cumpleNala: $('aCumpleNala').value, cumpleDona: $('aCumpleDona').value
+  });
+  $('aKey').value = '';
+  pintarAjustes();
+  $('estadoGuardado').textContent = config.nota || 'Guardado';
+  $('aGuardar').disabled = false;
+  setTimeout(() => $('estadoGuardado').textContent = '', 3000);
+};
+
+// ---------------- Arranque ----------------
+(async () => {
+  config = await p.config();
+  pintarAjustes();
+  const historial = await p.historial();
+  if (historial.length) historial.forEach(m => agregar(m.content, m.role === 'user' ? 'yo' : 'perro'));
+  else {
+    const v = document.createElement('div'); v.className = 'vacio';
+    v.textContent = config.tieneApiKey
+      ? `Platica con ${config.nombre}. Pídele recordatorios o cuéntale cosas importantes para que las recuerde.`
+      : 'Primero pega tu API key de DeepSeek en Ajustes y luego platica con tu perrito.';
+    $('mensajes').appendChild(v);
+  }
+  const d = await p.datos();
+  pintarRecordatorios(d.recordatorios);
+  pintarMemoria(d.memoria);
+  const inicial = new URLSearchParams(location.search).get('pestana') || 'chat';
+  mostrar(config.tieneApiKey || inicial !== 'chat' ? inicial : 'ajustes');
+})();
+</script>
+</body>
+</html>

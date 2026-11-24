@@ -1,0 +1,2128 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'">
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="300" height="290"></canvas>
+<script src="sprites/chispa/sprites.js"></script>
+<script src="sprites/pimienta/sprites.js"></script>
+<script>
+// =====================================================================
+// 1) CONFIGURACIÓN (las dos "perillas" para ajustar su ritmo)
+// =====================================================================
+const VELOCIDAD = 0.5;           // qué tan rápido camina (1 = rápido, 0.3 = muy tranquilo)
+const CALMA = 1;                 // cuánto dura cada actividad (2 = el doble de tiempo)
+const seg = n => n * 60 * CALMA; // segundos -> pasos del ciclo
+const TAM = () => Math.max(0.5, Math.min(1, Number(config.tamano) || 1));   // tamaño elegido en Ajustes
+
+const W = 300, H = 290, OX = 80, OY = 170, G = 1.2;
+const params = new URLSearchParams(location.search);
+const ID = params.get('id') || 'chispa';
+const RAZA = params.get('raza') || 'labrador';
+const PRINCIPAL = ID === 'chispa';
+const canvas = document.getElementById('c');
+let ctx = canvas.getContext('2d');
+
+const COLORES = {
+  labrador:  { pelo: '#1c1c1c', borde: '#4a4a4a', pecho: '#9a5a2b', oreja: '#111111', patas: '#1c1c1c', ojo: '#3b2412' },
+  schnauzer: { pelo: '#7b7b7b', borde: '#3d3d3d', pecho: '#cfcfcf', oreja: '#555555', patas: '#bdbdbd', ojo: '#1a1a1a',
+               claro: '#dcdcdc', manchas: '#5e5e5e' }
+};
+const C = COLORES[RAZA];
+const COMUN = { lengua: '#ff7a8a', lenguaBorde: '#d95c6c', z: '#5b6cff', corazon: '#ff4d6d' };
+
+// =====================================================================
+// 2) ESTADO
+// =====================================================================
+let displays = [], repisas = [], otros = [];
+let config = { sonido: true, nombre: 'Chispa', nombreAmigo: 'Pimienta', inactividadMin: 2, accesorio: 'auto' };
+let x = 0, y = 0, dir = 1;
+let estado = 'caminar', tiempo = seg(5), frame = 0;
+let vy = 0, vxAire = 0, soloPiso = false;
+let animo = 70, ultimoBajon = Date.now();
+let hambre = 20, ultimoPedido = 0;
+let corazones = [], bocadillo = null, cajaBocadillo = null;
+let pomodoro = null, clima = null;
+let cursor = { x: -9999, y: -9999 }, cursorAntes = null, cursorMovidoHasta = 0, ignorarCursorHasta = 0;
+let idle = 0, dormidoPorInactividad = false, escribiendo = 0, ultimoComentarioTeclado = 0;
+let pelota = null, tienePelota = false, esperandoPelota = false;
+let plato = null, yaComio = false, esperandoComida = false;
+let objetivoRepisa = null;
+let ultimaSubida = Date.now() - 2 * 60e3;
+let ignorarPelotaHasta = 0, descansoPelota = 0, juegoPropio = false;   // jugar con la pelota por su cuenta
+let ultimoBostezo = 0;
+let mariposa = null, ultimaMariposa = 0, ultimoTropiezo = 0, ultimaAlerta = 0;
+let regaloEnBoca = null, ultimoRegalo = Date.now(), orillaRegalo = 0;
+let sed = 20, suciedad = 10, desalino = 10, peso = 0, necesidad = false;
+let cumple = false, cumpleAmiga = false, favorito = null;
+let agua = null, cama = null, laser = null, charco = null;
+let esperandoAgua = false, yaBebio = 0, enCama = false;
+let paseo = null, siguiendoA = null, cuerdaJuego = null, escondite = null;
+let anclaX = 0, olfateo = 0;
+let espuma = [], frotado = 0, gotas = [], brillos = [], confeti = [];
+let cepillado = 0, ultimoCepillado = 0, ultimoMouse = null;
+let opacidad = 1, ultimoAvisoSed = 0, ultimoAvisoSucia = 0, ultimoFavorito = 0;
+let particulas = [], fantasma = null, dijoCumple = false;
+let arrastre = null, ignorando = true, clicPendiente = null;
+
+const trabajando = () => pomodoro && pomodoro.fase === 'trabajo';
+const centroX = () => x + OX + 70;
+const pies = () => y + H - 3;
+const hora = () => new Date().getHours();
+const esNoche = () => hora() >= 22 || hora() < 7;
+const llueve = () => clima && clima.lluvia;
+const haceFrio = () => clima && clima.temp < 14;
+const haceCalor = () => clima && clima.temp > 30;
+const azar = arr => arr[Math.floor(Math.random() * arr.length)];
+const miNombre = () => PRINCIPAL ? config.nombre : config.nombreAmigo;
+
+let ultimaVuelta = 0, dirVis = 1, giroT = 0;
+function voltear(nuevo, forzar = false) {
+  if (nuevo === dir) return;
+  if (!forzar && Date.now() - ultimaVuelta < 2000) return;
+  dir = nuevo; ultimaVuelta = Date.now();
+}
+function cambiar(e, dur) { estado = e; tiempo = dur; }
+function decir(texto, ms = 5000, fijo = false, accion = null) {
+  if (bocadillo && bocadillo.fijo && !fijo) return;     // no tapa un aviso importante que no has cerrado
+  bocadillo = { texto, hasta: fijo ? Infinity : Date.now() + ms, fijo, accion };
+}
+const ocupada = () => ['aire', 'arrastrado', 'bano', 'sacudirse', 'salir', 'afuera', 'ir_por_regalo', 'afuera_regalo', 'traer_regalo'].includes(estado);
+function lanzarCorazones(n = 3) {
+  for (let i = 0; i < n; i++) corazones.push({ x: OX + 50 + Math.random() * 50, y: OY + 40, vida: 60 + i * 10 });
+}
+function brincar(fuerza = 8) { estado = 'aire'; vy = -fuerza; vxAire = 0; }
+
+// =====================================================================
+// 3) SUELO: pantallas y repisas (bordes de ventanas abiertas)
+// =====================================================================
+function pantallaEn(px, py = pies()) {
+  const candidatas = displays.filter(d => px >= d.x && px < d.x + d.width);
+  if (!candidatas.length) return null;
+  let mejor = null, mejorDist = Infinity;
+  for (const d of candidatas) {
+    const dist = py < d.y ? d.y - py : py > d.y + d.height ? py - (d.y + d.height) : 0;
+    if (dist < mejorDist) { mejor = d; mejorDist = dist; }
+  }
+  return mejor;
+}
+function pantallaMasCercana(px) {
+  return displays.reduce((m, d) => !m || Math.abs(d.x + d.width / 2 - px) < Math.abs(m.x + m.width / 2 - px) ? d : m, null);
+}
+function superficies() {
+  const s = displays.map(d => ({ x1: d.x, x2: d.x + d.width, y: d.y + d.height, piso: true }));
+  if (!soloPiso) for (const r of repisas) s.push(r);
+  return s;
+}
+function sueloActual(py = pies()) {             // la superficie más alta que esté debajo de sus patas
+  const px = centroX();
+  let mejor = null;
+  for (const s of superficies()) {
+    if (px >= s.x1 && px < s.x2 && s.y >= py - 8 && (!mejor || s.y < mejor.y)) mejor = s;
+  }
+  if (!mejor) {                                 // quedó fuera de las pantallas: lo regresamos
+    const d = pantallaMasCercana(px);
+    x = Math.min(Math.max(x, d.x - OX - 60), d.x + d.width - OX - 80);
+    mejor = { y: d.y + d.height, piso: true };
+  }
+  return mejor;
+}
+const enRepisa = () => !sueloActual().piso;
+function bajarAlPiso() { soloPiso = true; estado = 'aire'; vy = -4; vxAire = 1.5 * dir; }
+
+// =====================================================================
+// 4) SONIDO: ladrido sintetizado (el schnauzer ladra más agudo)
+// =====================================================================
+let audio = null;
+function ladrar(veces = 2, forzar = false) {
+  if (!config.sonido || (trabajando() && !forzar)) return;
+  try {
+    audio = audio || new AudioContext();
+    const tono = RAZA === 'schnauzer' ? 1.35 : 1;
+    for (let i = 0; i < veces; i++) {
+      const t = audio.currentTime + i * 0.22;
+      const o = audio.createOscillator(), g = audio.createGain(), f = audio.createBiquadFilter();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(520 * tono, t);
+      o.frequency.exponentialRampToValueAtTime(220 * tono, t + 0.13);
+      f.type = 'bandpass'; f.frequency.value = 900 * tono; f.Q.value = 1.2;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.35, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+      o.connect(f).connect(g).connect(audio.destination);
+      o.start(t); o.stop(t + 0.18);
+    }
+  } catch (e) { /* sin audio */ }
+}
+
+// =====================================================================
+// 4b) ACCIONES que le pides desde el menú o el chat
+// =====================================================================
+let galletaPorTruco = false, salidaOrilla = 0;
+const desfaseCuerda = () => {                                           // las dos se mueven juntas (la cuerda no se estira)
+  if (!cuerdaJuego) return 0;
+  const t = (Date.now() - cuerdaJuego.inicio) / 1000;
+  const jalones = 9 * Math.sin(t * 2.6) + 4 * Math.sin(t * 6.1);
+  const final = Math.max(0, Math.min(1, 1 - (cuerdaJuego.fin - Date.now()) / 3000));   // últimos 3 s: gana una
+  const gane = cuerdaJuego.ganadora === ID;
+  return jalones + final * 30 * (gane ? -cuerdaJuego.lado : cuerdaJuego.lado);         // hacia el lado de la ganadora
+};
+
+function prepararAccion() { dormidoPorInactividad = false; enCama = false; if (tienePelota) soltarPelota(false); }
+function hacerTruco(cual) {
+  if (ocupada() || trabajando()) return;
+  prepararAccion();
+  window.mascota.evento({ tipo: 'truco' });
+  galletaPorTruco = true;
+  switch (cual) {
+    case 'sentarse': cambiar('sentado', seg(3)); decir('¡Sentada! 🐶', 2000); break;
+    case 'pata':     cambiar('pata', seg(3.5)); decir('¡Choca esa pata! 🐾', 2000); break;
+    case 'muertita': cambiar('muertita', seg(4)); decir('*bang* 💥', 1500); break;
+    case 'girar':    cambiar('cola', seg(2)); break;
+    case 'saltar':   brincar(14); lanzarCorazones(2); break;
+    case 'hablar':   ladrar(2, true); decir('¡Guau guau!', 2000); cambiar('sentado', seg(2.5)); break;
+    case 'rodar':    cambiar('rodar', seg(1.75)); break;
+  }
+}
+function pedirGalleta() {
+  galletaPorTruco = false;
+  decir('¿Y mi galletita? 🍪', 8000, false, 'galleta');
+  return cambiar('sentado', seg(6));
+}
+function darGalleta() {
+  if (ocupada()) return;
+  prepararAccion();
+  if (bocadillo && bocadillo.accion === 'galleta') bocadillo = null;
+  galletaPorTruco = false;
+  window.mascota.evento({ tipo: 'galleta' });
+  peso += 5; animo = Math.min(100, animo + 6); lanzarCorazones(3);
+  cambiar('comer_galleta', seg(2.5));
+}
+function darHueso() {
+  if (ocupada()) return;
+  prepararAccion();
+  window.mascota.evento({ tipo: 'hueso' });
+  decir('¡Un huesito! 🦴', 2000);
+  cambiar('roer', seg(25));
+}
+function empezarBano() {
+  if (ocupada() || trabajando()) return;
+  prepararAccion();
+  espuma = []; frotado = 0;
+  cambiar('bano', seg(90));
+  decir('Pásame el mouse encima para tallarme 🧼', 4000);
+}
+function enjuagar() {
+  espuma = [];
+  for (let i = 0; i < 40; i++) gotas.push({ x: OX + 30 + Math.random() * 100, y: OY + Math.random() * 40, vx: 0, vy: 2 + Math.random() * 2 });
+  cambiar('sacudirse', seg(1.6));
+}
+function salirAlBano() {
+  if (ocupada()) return;
+  prepararAccion();
+  if (bocadillo && bocadillo.accion === 'salir') bocadillo = null;
+  const d = pantallaEn(centroX()) || displays[0];
+  salidaOrilla = centroX() - d.x < d.x + d.width - centroX() ? d.x + 40 : d.x + d.width - 40;
+  cambiar('salir', seg(25));
+}
+function accidente() {
+  if (bocadillo && bocadillo.accion === 'salir') bocadillo = null;
+  window.mascota.evento({ tipo: 'accidente', x: centroX() - dir * 40 });
+  necesidad = false; animo = Math.max(0, animo - 10);
+  decir('Ups… no aguanté 😅', 4000);
+  return cambiar('triste', seg(8));
+}
+function empezarMariposa() {
+  ultimaMariposa = Date.now();
+  mariposa = { x: centroX() + dir * 150, y: pies() - 115, t: Math.random() * 10, huye: false,
+               color: azar([['#ff9f1c', '#1b1b1b'], ['#5bc0eb', '#1d3557'], ['#f7d046', '#5a3d0c']]) };
+  decir(azar(['¡Una mariposa! 🦋', '¡Mira! 🦋']), 2000);
+  return cambiar('cazar_mariposa', seg(12));
+}
+function moverMariposa() {
+  if (!mariposa) return;
+  mariposa.t += 1 / 60;
+  if (estado !== 'cazar_mariposa' && estado !== 'aire') mariposa.huye = true;   // si se distrae, la mariposa se va
+  if (mariposa.huye) { mariposa.y -= 1.6; mariposa.x += Math.sin(mariposa.t * 3) * 1.5; if (mariposa.y < y + 5) mariposa = null; return; }
+  const meta = centroX() + dir * (135 + 25 * Math.sin(mariposa.t * 0.8));        // revolotea adelante de su nariz
+  mariposa.x += (meta - mariposa.x) * 0.035 + Math.sin(mariposa.t * 4.3) * 0.9;
+  mariposa.y = pies() - 115 + Math.sin(mariposa.t * 2.1) * 14 + Math.sin(mariposa.t * 6.7) * 4;
+}
+function dibujarMariposa() {
+  if (!mariposa) return;
+  const mx = mariposa.x - x, my = mariposa.y - y, ab = Math.abs(Math.sin(mariposa.t * 14));
+  const [c1, c2] = mariposa.color;
+  ctx.save(); ctx.translate(mx, my);
+  [-1, 1].forEach(l => {
+    ctx.save(); ctx.scale(l * (0.25 + ab * 0.75), 1);
+    ctx.beginPath(); ctx.ellipse(6, -4, 7, 5.5, -0.5, 0, Math.PI * 2); ctx.fillStyle = c1; ctx.fill(); ctx.strokeStyle = c2; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(5, 4, 4.5, 3.5, 0.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(9, -6, 1, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  });
+  ctx.fillStyle = c2; ctx.beginPath(); ctx.ellipse(0, 0, 1.4, 5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = c2; ctx.lineWidth = 0.8; ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(-3, -9); ctx.moveTo(0, -5); ctx.lineTo(3, -9); ctx.stroke();
+  ctx.restore();
+}
+function irPorRegalo() {
+  ultimoRegalo = Date.now();
+  if (enRepisa()) return bajarAlPiso();
+  const d = pantallaEn(centroX()) || displays[0];
+  orillaRegalo = centroX() - d.x < d.x + d.width - centroX() ? d.x + 40 : d.x + d.width - 40;
+  return cambiar('ir_por_regalo', seg(30));
+}
+// El regalito en el hocico (mismas figuras que en el piso, en chiquito)
+function dibujarRegaloBoca(item) {
+  if (item === 'hoja') {
+    ctx.save(); ctx.rotate(-0.3);
+    ctx.beginPath(); ctx.moveTo(-9, 0); ctx.quadraticCurveTo(-1, -7, 9, 0); ctx.quadraticCurveTo(-1, 7, -9, 0);
+    ctx.fillStyle = '#e07b2b'; ctx.fill(); ctx.strokeStyle = '#7a3410'; ctx.lineWidth = 1; ctx.stroke(); ctx.restore();
+  } else if (item === 'palito') {
+    ctx.save(); ctx.lineCap = 'round';
+    ctx.strokeStyle = '#5a3a1c'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(-12, 1); ctx.lineTo(13, -1); ctx.stroke();
+    ctx.strokeStyle = '#8b5e34'; ctx.lineWidth = 3.4; ctx.beginPath(); ctx.moveTo(-12, 1); ctx.lineTo(13, -1); ctx.stroke(); ctx.restore();
+  } else {
+    ctx.save(); ctx.strokeStyle = '#4a8a2a'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(-8, 2); ctx.lineTo(2, 0); ctx.stroke();
+    for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3; ctx.beginPath(); ctx.ellipse(5 + Math.cos(a) * 3.6, Math.sin(a) * 3.6, 3, 1.9, a, 0, Math.PI * 2); ctx.fillStyle = '#ff8fb8'; ctx.fill(); }
+    ctx.beginPath(); ctx.arc(5, 0, 2.2, 0, Math.PI * 2); ctx.fillStyle = '#ffd23f'; ctx.fill(); ctx.restore();
+  }
+}
+function tropezar() {
+  ultimoTropiezo = Date.now();
+  if (tienePelota) soltarPelota(false);
+  aplaste = 1;
+  cambiar('tropiezo', seg(1.2));
+}
+
+function lanzarConfeti(n = 40) {
+  const colores = ['#ff4d9d', '#ffd23f', '#5bc0eb', '#9bc53d', '#e55934'];
+  for (let i = 0; i < n; i++) confeti.push({ x: OX + 70, y: OY + 30, vx: (Math.random() - 0.5) * 6, vy: -3 - Math.random() * 4, color: azar(colores), vida: 120 });
+}
+
+// =====================================================================
+// 5) CEREBRO: qué hace cuando termina una actividad
+// =====================================================================
+function elegirEstado() {
+  const terminado = estado;
+  if (terminado !== 'dormir') enCama = false;
+  if (terminado === 'afuera') {
+    opacidad = 0.15; necesidad = false;
+    window.mascota.evento({ tipo: 'salio' });
+    decir('¡Listo! 😌 Gracias', 3000);
+    return cambiar('sentado', seg(3));
+  }
+  if (terminado === 'salir') { opacidad = 1; return cambiar('sentado', seg(2)); }
+  if (terminado === 'pedir_salir') return accidente();
+  if (terminado === 'sacudirse') {
+    suciedad = 0; window.mascota.evento({ tipo: 'banada' });
+    for (let i = 0; i < 12; i++) brillos.push({ x: OX + 30 + Math.random() * 100, y: OY + 40 + Math.random() * 60, vida: 40 });
+    decir(azar(['¡Limpiecita! ✨', '¡Huelo a rosas! 🌸', '¡Qué rico bañito! 🛁']), 3000);
+    animo = Math.min(100, animo + 10);
+    return cambiar('sentado', seg(4));
+  }
+  if (terminado === 'bano') { espuma = []; decir('Bueno… luego me bañas 🙈', 2500); return cambiar('sentado', seg(3)); }
+  if (terminado === 'cazar_mariposa') {
+    if (mariposa) mariposa.huye = true;
+    decir(azar(['Casi la atrapo… 🦋', '¡Se escapó! 🦋', 'La próxima vez sí 😤']), 2500);
+    return cambiar('sentado', seg(3));
+  }
+  if (terminado === 'alerta') return cambiar('sentado', seg(3));
+  if (terminado === 'tropiezo') { decir(azar(['¡Uy! 😅', 'No pasó nada 😅', '¡Ups!']), 1800); return cambiar('sentado', seg(2)); }
+  if (terminado === 'afuera_regalo') {                                 // vuelve con algo en la boca
+    regaloEnBoca = azar(['hoja', 'palito', 'flor']);
+    const d = pantallaEn(centroX()) || displays[0];
+    voltear(orillaRegalo < d.x + d.width / 2 ? 1 : -1, true);
+    return cambiar('traer_regalo', seg(30));
+  }
+  if (terminado === 'ir_por_regalo' || terminado === 'traer_regalo') { opacidad = 1; regaloEnBoca = null; return cambiar('sentado', seg(2)); }
+  if (terminado === 'bostezar') return cambiar(Math.random() < 0.5 ? 'acurrucado' : 'sentado', seg(8));
+  if (terminado === 'celebrar') return cambiar('sentado', seg(4));
+  if (terminado === 'beber') { decir(azar(['¡Ahh, qué fresca! 💧', '*slurp slurp*']), 2500); return cambiar('sentado', seg(3)); }
+  if (terminado === 'jalar') { cuerdaJuego = null; return cambiar('sentado', seg(3)); }
+  if (terminado === 'escondida') {                                     // nadie la encontró
+    escondite = null; window.mascota.evento({ tipo: 'encontrada' });
+    decir('¡Gané, no me encontraste! 😜', 3000);
+    return cambiar('sentado', seg(3));
+  }
+  if (terminado === 'esconderse' || terminado === 'buscar_amiga') escondite = null;
+  if (terminado === 'ir_jalar') cuerdaJuego = null;
+  if (galletaPorTruco && terminado !== 'aire') return pedirGalleta();
+  if (['roer', 'comer_galleta', 'pata', 'muertita', 'rodar', 'celos', 'perseguir_laser', 'ir_cama', 'ir_beber',
+       'escondida', 'esconderse', 'buscar_amiga', 'ir_jalar', 'seguir', 'pasear', 'pedir_salir_ir'].includes(terminado)) {
+    return cambiar('sentado', seg(3));
+  }
+  if (trabajando()) return cambiar('dormir', seg(10));
+  if (estado === 'dormir' || estado === 'acurrucado') return cambiar('estirar', seg(2.5));
+  if (estado === 'comer') {
+    animo = Math.min(100, animo + 15);
+    decir(azar(['¡Qué rico! 😋', '¡Gracias! 🍖', '*lame el plato*']), 3000);
+    return cambiar('sentado', seg(4));
+  }
+
+  // Si anda sobre una ventana, a veces se baja
+  if (enRepisa() && Math.random() < 0.15) return bajarAlPiso();
+
+  const amigo = otros[0];
+  const candidatasRepisa = repisas.filter(r =>
+    r.y < pies() - 50 && r.y > pies() - 620 && r.x2 - r.x1 > 140 &&
+    Math.max(r.x1, centroX() - 400) < Math.min(r.x2, centroX() + 400));
+
+  const opciones = (animo < 30 || hambre > 85)
+    ? { triste: 5, dormir: 3, caminar: 2 }
+    : {
+        caminar: 6, sentado: 4,
+        dormir: esNoche() ? 4 : 1,
+        acurrucado: (llueve() || haceFrio()) ? 3 : 0,
+        rascar: 0.5, estirar: 0.3,
+        cola: animo > 80 ? 0.6 : 0.2,
+        pelota: pelota && !pelota.portador && !pelota.lanzada && pelota.enSuelo && Date.now() > descansoPelota && Date.now() > (pelota.descansoHasta || 0) && animo > 40 ? 2.5 : 0,
+        bostezo: config.reaccionesHora !== false && hora() >= 14 && hora() < 18 ? 1.2 : 0,
+        mariposa: !esNoche() && !llueve() && !mariposa && Date.now() - ultimaMariposa > 10 * 60e3 ? 0.5 : 0,
+        alerta: Date.now() - ultimaAlerta > 6 * 60e3 ? 0.35 : 0,
+        regalo: !esNoche() && !llueve() && Date.now() - ultimoRegalo > 75 * 60e3 && !trabajando() ? 0.3 : 0,
+        panza: haceCalor() ? 1.5 : animo > 60 ? 0.5 : 0.2,
+        trepar: candidatasRepisa.length ? (enRepisa() ? 1 : 3) : 0,
+        amigo: amigo ? 1 : 0
+      };
+  const total = Object.values(opciones).reduce((a, b) => a + b, 0);
+  let r = Math.random() * total, elegido = 'caminar';
+  for (const [k, p] of Object.entries(opciones)) { if ((r -= p) <= 0) { elegido = k; break; } }
+
+  if (elegido === 'pelota') {                                         // la ve en el piso y va por ella
+    if (enRepisa()) return bajarAlPiso();
+    juegoPropio = true;
+    return cambiar('buscar', seg(20));
+  }
+  if (elegido === 'mariposa') return empezarMariposa();
+  if (elegido === 'alerta') {
+    ultimaAlerta = Date.now();
+    voltear(Math.random() < 0.5 ? 1 : -1, true);
+    decir(azar(['¡Guau! ¿Qué fue eso? 👀', '¡Escuché algo! 👂', '¡Guau guau! 👀']), 2500);
+    ladrar(2);
+    return cambiar('alerta', seg(3.5));
+  }
+  if (elegido === 'regalo') return irPorRegalo();
+  if (elegido === 'bostezo') {
+    if (Date.now() - ultimoBostezo < 8 * 60e3) return cambiar('sentado', seg(4));
+    ultimoBostezo = Date.now();
+    decir(azar(['*bostezo* 🥱', 'Qué sueñito de la tarde… 🥱', '*bostezo* ¿Ya merito acabamos? 🥱']), 3000);
+    return cambiar('bostezar', seg(2.5));
+  }
+  if (elegido === 'dormir' && cama && (esNoche() || Math.random() < 0.7)) {
+    if (enRepisa()) return bajarAlPiso();
+    if (esNoche()) window.mascota.meVoyADormir();                   // y su amiga se viene a dormir con ella
+    return cambiar('ir_cama', seg(30));
+  }
+  if (favorito && Math.random() < 0.04 && Date.now() - ultimoFavorito > 30 * 60e3) {
+    ultimoFavorito = Date.now();
+    const nombres = { pelota: 'la pelota 🎾', hueso: 'el huesito 🦴', cuerda: 'la cuerda 🪢', laser: 'el láser 🔴' };
+    decir(`Mi juguete favorito es ${nombres[favorito]}`, 3500);
+  }
+  if (candidatasRepisa.length && !enRepisa() && Date.now() - ultimaSubida > 4 * 60e3 && Math.random() < 0.5) elegido = 'trepar';
+  if (elegido === 'trepar') {
+    ultimaSubida = Date.now();
+    const rep = azar(candidatasRepisa);
+    objetivoRepisa = { ...rep, xObjetivo: Math.min(Math.max(centroX(), rep.x1 + 50), rep.x2 - 50) };
+    return cambiar('ir_trepar', seg(15));
+  }
+  if (elegido === 'amigo') {
+    if (enRepisa()) return bajarAlPiso();
+    return cambiar('ir_amigo', seg(15));
+  }
+
+  const dur = {
+    caminar: seg(6 + Math.random() * 8), sentado: seg(5 + Math.random() * 6),
+    dormir: esNoche() ? seg(40 + Math.random() * 50) : seg(20 + Math.random() * 25),
+    acurrucado: seg(20 + Math.random() * 20),
+    rascar: seg(3), estirar: seg(2.5), cola: seg(3), panza: seg(6), triste: seg(12)
+  }[elegido];
+  if (elegido === 'caminar' && Math.random() < 0.35) voltear(-dir);
+  cambiar(elegido, dur);
+
+  // De vez en cuando dice algo o ladra
+  if (Math.random() < 0.06 && !bocadillo) {
+    decir(esNoche() ? azar(['Ya es tarde, ¿no? 🌙', '*bostezo*'])
+      : llueve() ? azar(['Qué bueno que traje mi sombrilla ☔', 'Hoy no salgo 🌧️'])
+      : animo < 30 ? azar(['Nadie me hace caso…', '*suspiro*'])
+      : azar(['¡Guau!', '¿Jugamos?', '🐾', `Soy ${miNombre()} 🐶`]), 3500);
+  } else if (animo > 60 && Math.random() < 0.08) ladrar(1);
+}
+
+function velocidad() {
+  let v = 2;
+  if (hora() >= 7 && hora() < 12) v = 2.5;
+  if (esNoche()) v = 1.5;
+  if (animo > 80) v += 0.5;
+  if (hambre > 70) v -= 0.5;
+  if (haceCalor()) v *= 0.8;
+  return v * VELOCIDAD;
+}
+
+// Camina hacia una x de la pantalla. Devuelve true cuando llega.
+function irHacia(xDestino, vel, margen = 8) {
+  const dx = xDestino - centroX();
+  if (Math.abs(dx) <= margen) return true;
+  voltear(dx > 0 ? 1 : -1, true);
+  avanzar(Math.min(vel, Math.abs(dx)));
+  return false;
+}
+let recorrido = 0, rampa = 1, ultimoAvance = 0;
+function avanzar(vel) {
+  if (frame - ultimoAvance > 3) rampa = 0.35;                         // arranca despacito y acelera
+  rampa = Math.min(1, rampa + 0.045); ultimoAvance = frame;
+  vel *= rampa * (0.7 + 0.3 * TAM());                                 // chiquitas caminan un poco más lento
+  recorrido += Math.abs(vel);
+  const d = pantallaEn(centroX() + vel * dir * 10);
+  if (!d) { voltear(-dir, true); return; }         // orilla del escritorio
+  x += vel * dir;
+  const piso = d.y + d.height;
+  if (!enRepisa() && piso < pies() - 4) {          // pantalla vecina más alta: brinca para subir
+    estado = 'aire'; vy = -Math.sqrt(2 * G * (pies() - piso + 25)); vxAire = 2 * dir * VELOCIDAD;
+  }
+}
+
+function quierePerseguir() {
+  if (trabajando() || animo < 30 || Date.now() < ignorarCursorHasta || tienePelota) return false;
+  if (!['caminar', 'sentado', 'correr'].includes(estado)) return false;
+  const dx = cursor.x - centroX();
+  return Date.now() < cursorMovidoHasta && Math.abs(dx) < 220 && Math.abs(dx) > 60 &&
+         cursor.y > pies() - 260 && cursor.y < pies() + 30;
+}
+
+function saludar(texto) {
+  brincar(12); animo = Math.min(100, animo + 5);
+  ladrar(2); lanzarCorazones(4); if (texto) decir(texto, 4000);
+}
+
+// Cosas importantes que interrumpen lo que esté haciendo
+const INTERRUMPIBLE = ['caminar', 'sentado', 'rascar', 'estirar', 'cola', 'panza', 'triste', 'bostezar',
+                       'teclear', 'acurrucado', 'ir_trepar', 'ir_amigo', 'correr', 'dormir'];
+function revisarUrgencias() {
+  if (!INTERRUMPIBLE.includes(estado) || trabajando()) return;
+  const dormidoProfundo = estado === 'dormir' && dormidoPorInactividad;
+  if (dormidoProfundo) return;
+
+  // Juegos en conjunto que le pidieron
+  if (paseo)       { if (enRepisa()) return bajarAlPiso(); return cambiar('pasear', 1e9); }
+  if (siguiendoA)  { if (enRepisa()) return bajarAlPiso(); return cambiar('seguir', 1e9); }
+  if (cuerdaJuego) { if (enRepisa()) return bajarAlPiso(); return cambiar('ir_jalar', seg(20)); }
+  if (escondite)   {
+    if (enRepisa()) return bajarAlPiso();
+    return cambiar(escondite.rol === 'esconder' ? 'esconderse' : 'buscar_amiga', 1e9);
+  }
+  // ¡El láser!
+  if (laser && animo >= 10) { if (enRepisa()) return bajarAlPiso(); return cambiar('perseguir_laser', seg(40)); }
+
+  // ¡Aventaron la pelota!
+  if (pelota && pelota.lanzada && !pelota.portador && !tienePelota && animo >= 20 && Date.now() > ignorarPelotaHasta &&
+      (pelota.lanzadoPor === 'usuario' || Date.now() > descansoPelota)) {
+    if (enRepisa()) return bajarAlPiso();
+    return cambiar('buscar', seg(20));
+  }
+  // Hay comida y tiene hambre
+  if (plato && plato.porciones > 0 && !yaComio && hambre > 10 && estado !== 'dormir') {
+    if (enRepisa()) return bajarAlPiso();
+    return cambiar('ir_comer', seg(25));
+  }
+  // Tiene sed y hay agua
+  if (agua && agua.nivel > 0 && sed > 40 && Date.now() - yaBebio > 60000 && estado !== 'dormir') {
+    if (enRepisa()) return bajarAlPiso();
+    return cambiar('ir_beber', seg(25));
+  }
+  // Necesita salir al baño
+  if (necesidad && estado !== 'dormir') {
+    if (enRepisa()) return bajarAlPiso();
+    return cambiar('pedir_salir_ir', seg(20));
+  }
+  // Estás escribiendo: se pone a "teclear" contigo
+  if (escribiendo > 2 && ['caminar', 'sentado', 'rascar', 'cola', 'triste', 'acurrucado'].includes(estado)) {
+    cambiar('teclear', 1e9);
+    if (escribiendo > 40 && Date.now() - ultimoComentarioTeclado > 10 * 60e3 && PRINCIPAL) {
+      ultimoComentarioTeclado = Date.now();
+      decir(azar(['¡Qué rápido escribes! ⌨️', 'Yo también estoy chambeando 💼', '¡Tú puedes! 💪']), 3500);
+    }
+  }
+}
+
+// =====================================================================
+// 6) CICLO PRINCIPAL (la lógica siempre corre a 60 pasos por segundo)
+// =====================================================================
+const PASO = 1000 / 60;
+let ultimoT = null, acumulado = 0, ultimaPos = '';
+
+function actualizar(t) {
+  if (ultimoT === null) ultimoT = t;
+  acumulado += Math.min(t - ultimoT, 250);
+  ultimoT = t;
+  while (acumulado >= PASO) { paso(); acumulado -= PASO; }
+  const pos = Math.round(x) + ',' + Math.round(y);
+  if (pos !== ultimaPos) { window.mascota.mover(x, y); ultimaPos = pos; }
+  if (frame % 3 === 0) window.mascota.reporte({ estado, dir, x, y, boca: bocaVentana ? { x: x + bocaVentana.x, y: y + bocaVentana.y } : null });
+  dibujar();
+  requestAnimationFrame(actualizar);
+}
+
+function paso() {
+  frame++;
+  if (Date.now() - ultimoBajon > 20000) {
+    animo = Math.max(0, animo - (hambre > 70 ? 3 : 1));
+    ultimoBajon = Date.now();
+  }
+  actualizarEfectos();
+  moverMariposa();
+  if (['correr', 'buscar', 'perseguir_laser', 'cazar_mariposa', 'traer'].includes(estado) && Date.now() - ultimoTropiezo > 4 * 60e3 &&
+      Math.random() < 1 / 2400) tropezar();                            // de vez en cuando se tropieza 😅
+  // Pide agua o baño
+  if (sed > 60 && (!agua || agua.nivel <= 0) && Date.now() - ultimoAvisoSed > 10 * 60e3 && !trabajando() && !ocupada() && estado !== 'dormir') {
+    ultimoAvisoSed = Date.now();
+    decir(PRINCIPAL ? 'Tengo sed… ¿me pones agüita? 💧' : 'Wuf… ¿agua? 💧', 6000);
+  }
+  if (suciedad > 75 && Date.now() - ultimoAvisoSucia > 30 * 60e3 && !trabajando() && !ocupada() && estado !== 'dormir') {
+    ultimoAvisoSucia = Date.now();
+    decir('Estoy toda sucia… ¿me bañas? 🛁', 6000);
+  }
+  if (cumple && !dijoCumple && frame > 180) { dijoCumple = true; decir('¡Hoy es mi cumpleaños! 🎂🎉', 0, true); lanzarConfeti(); ladrar(2, true); }
+  if (cumpleAmiga && !dijoCumple && frame > 400) { dijoCumple = true; decir(`¡Feliz cumpleaños, ${PRINCIPAL ? config.nombreAmigo : config.nombre}! 🎉`, 5000); }
+  // Pide comida si tiene hambre
+  if (hambre > 60 && !plato && Date.now() - ultimoPedido > 10 * 60e3 && !trabajando() && estado !== 'dormir') {
+    ultimoPedido = Date.now();
+    decir(PRINCIPAL ? 'Tengo hambrita… ¿me sirves de comer? 🍖' : 'Wuf… ¿y mis croquetas? 🥺', 6000);
+    ladrar(1);
+  }
+
+  if (estado === 'aire') {
+    const piesAntes = pies();                   // así no "atraviesa" una repisa si cae muy rápido
+    vy += G; y += vy; x += vxAire;
+    const s = sueloActual(Math.min(piesAntes, pies()));
+    if (vy >= 0 && y >= s.y - H) {
+      if (vy > 6) aplaste = Math.min(1, vy / 18);     // se aplasta un poquito al caer
+      y = s.y - H; vy = 0; vxAire = 0;
+      if (s.piso) soloPiso = false;
+      if (dormidoPorInactividad) cambiar('dormir', 1e9);
+      else if (tienePelota) cambiar('traer', seg(20));
+      else cambiar('sentado', seg(3));
+    }
+  } else if (estado !== 'arrastrado' && !arrastre && !clicPendiente) {
+    tiempo--;
+    revisarUrgencias();
+    if (quierePerseguir() && estado !== 'correr') cambiar('correr', seg(6));
+
+    // Voltea a ver tu cursor cuando estás cerca y está tranquila
+    if (['sentado', 'acurrucado', 'triste', 'teclear'].includes(estado) && Date.now() < cursorMovidoHasta) {
+      const dxc = cursor.x - centroX();
+      if (Math.abs(dxc) > 45 && Math.abs(dxc) < 600 && Math.abs(cursor.y - pies()) < 450) voltear(dxc > 0 ? 1 : -1);
+    }
+
+    switch (estado) {
+      case 'caminar': avanzar(velocidad()); break;
+
+      case 'correr': {
+        const dx = cursor.x - centroX();
+        if (Math.abs(dx) > 50) voltear(dx > 0 ? 1 : -1);
+        if (Math.abs(dx) < 30 || !quierePerseguir()) {
+          ignorarCursorHasta = Date.now() + 20000;
+          cambiar('sentado', seg(4)); animo = Math.min(100, animo + 2);
+        } else avanzar(4 * VELOCIDAD);
+        break;
+      }
+
+      case 'buscar': {
+        if (!pelota || (pelota.portador && pelota.portador !== ID)) { cambiar('sentado', seg(3)); break; }
+        const llego = irHacia(pelota.x, 5 * VELOCIDAD + 1, 16);
+        const cerca = pelota.y > pies() - 45;
+        if (llego && cerca && !esperandoPelota) {
+          esperandoPelota = true;
+          window.mascota.agarrarPelota().then(ok => {
+            esperandoPelota = false;
+            if (!ok) { cambiar('sentado', seg(3)); return; }
+            tienePelota = true; ladrar(1);
+            const tuya = pelota && pelota.lanzadoPor === 'usuario' && !juegoPropio;
+            juegoPropio = false;
+            if (tuya) { cambiar('traer', seg(20)); return; }
+            if (pelota && pelota.rondas >= 6) {                         // ya se cansó: la deja y descansa
+              descansoPelota = Date.now() + 3 * 60e3;
+              cambiar('cansada_pelota', seg(2)); return;
+            }
+            cambiar(otros[0] && Math.random() < 0.65 ? 'llevar_amiga' : 'lanzar_sola', seg(15));
+          });
+        }
+        break;
+      }
+
+      case 'llevar_amiga': {                                         // se la lleva a su amiga y se la avienta
+        const amiga = otros[0];
+        if (!amiga || !tienePelota) { cambiar('lanzar_sola', seg(2)); break; }
+        const ax = amiga.x + OX + 70, lado = ax > centroX() ? 1 : -1;
+        if (irHacia(ax - lado * 110, velocidad() + 1.5, 14)) {
+          voltear(lado, true);
+          soltarPelota(false, { vx: lado * 3.2, vy: -6 });
+          decir(azar(['¡Te toca! 🎾', '¡Atrápala!', '¡Tuya!']), 2000);
+          cambiar('sentado', seg(2.5));
+        }
+        break;
+      }
+      case 'lanzar_sola':                                            // la avienta y corre tras ella
+        if (tiempo < seg(15) - 25 && tienePelota) {
+          soltarPelota(false, { vx: dir * (6 + Math.random() * 4), vy: -7 });
+          ignorarPelotaHasta = Date.now() + 700;               // y sale corriendo tras ella
+          cambiar('sentado', 20);
+        }
+        break;
+      case 'cansada_pelota':
+        if (tienePelota) { soltarPelota(false); decir(azar(['Uf, ya me cansé 😮‍💨', 'Ahorita seguimos… 😮‍💨']), 3000); }
+        if (tiempo <= 0) cambiar('acurrucado', seg(20));
+        break;
+
+      case 'traer': {
+        const d = pantallaEn(centroX()) || displays[0];
+        const destino = Math.min(Math.max(cursor.x, d.x + 80), d.x + d.width - 80);
+        if (irHacia(destino, 4 * VELOCIDAD + 1, 40)) soltarPelota(true);
+        break;
+      }
+
+      case 'ir_comer': {
+        if (!plato || plato.porciones <= 0) { cambiar('sentado', seg(2)); break; }
+        const lado = plato.x > centroX() ? 1 : -1;
+        if (irHacia(plato.x - lado * 45, 3 * VELOCIDAD + 0.5, 4) && !esperandoComida) {
+          voltear(lado, true);
+          esperandoComida = true;
+          window.mascota.comer().then(ok => {
+            esperandoComida = false; yaComio = true;
+            if (ok) cambiar('comer', seg(6));
+            else { decir('Ya se acabó 😢', 2500); cambiar('sentado', seg(3)); }
+          });
+        }
+        break;
+      }
+
+      case 'ir_trepar': {
+        const sigue = objetivoRepisa && repisas.some(r => Math.abs(r.y - objetivoRepisa.y) < 3 &&
+          r.x1 <= objetivoRepisa.xObjetivo && r.x2 >= objetivoRepisa.xObjetivo);
+        if (!sigue) { objetivoRepisa = null; cambiar('sentado', seg(2)); break; }
+        if (irHacia(objetivoRepisa.xObjetivo, velocidad() + 0.5, 6)) {
+          estado = 'aire';
+          vy = -Math.sqrt(2 * G * (pies() - objetivoRepisa.y + 35));
+          vxAire = 0;
+          objetivoRepisa = null;
+        }
+        break;
+      }
+
+      case 'ir_amigo': {
+        const amigo = otros[0];
+        if (!amigo) { cambiar('sentado', seg(2)); break; }
+        const ax = amigo.x + OX + 70;
+        const lado = ax > centroX() ? 1 : -1;
+        if (irHacia(ax - lado * 70, velocidad() + 1, 10)) {
+          voltear(lado, true);
+          window.mascota.jugarCon();
+          brincar(9); lanzarCorazones(3); ladrar(1);
+        }
+        break;
+      }
+
+      case 'teclear':
+        if (escribiendo === 0) cambiar('sentado', seg(3));
+        break;
+
+      case 'perseguir_laser': {
+        if (!laser) { cambiar('sentado', seg(2)); break; }
+        const dx = laser.x - centroX();
+        if (Math.abs(dx) > 20) { voltear(dx > 0 ? 1 : -1, true); avanzar(Math.min(Math.abs(dx), 5 * VELOCIDAD + 1.5)); }
+        else if (laser.y < pies() - 40 && Math.random() < 0.04) brincar(11);
+        break;
+      }
+
+      case 'ir_beber': {
+        if (!agua || agua.nivel <= 0) { cambiar('sentado', seg(2)); break; }
+        const lado = agua.x > centroX() ? 1 : -1;
+        if (irHacia(agua.x - lado * 45, 3 * VELOCIDAD + 0.5, 4) && !esperandoAgua) {
+          voltear(lado, true); esperandoAgua = true;
+          window.mascota.beber().then(ok => {
+            esperandoAgua = false; yaBebio = Date.now();
+            cambiar(ok ? 'beber' : 'sentado', ok ? seg(4) : seg(2));
+          });
+        }
+        break;
+      }
+
+      case 'ir_cama': {
+        if (!cama) { cambiar('dormir', seg(30)); break; }
+        const juntas = !!otros[0];                                   // si hay otra perrita, cada una en su ladito (nunca una encima de la otra)
+        const lugar = juntas ? cama.x + (PRINCIPAL ? -52 : 66) : cama.x;
+        if (irHacia(lugar, velocidad() + 0.3, 6)) {
+          if (juntas && esNoche()) voltear(PRINCIPAL ? 1 : -1, true);   // de noche, acurrucadas viéndose
+          enCama = true; cambiar('dormir', esNoche() ? seg(90) : seg(40));
+        }
+        break;
+      }
+
+      case 'cazar_mariposa': {
+        if (!mariposa) { cambiar('sentado', seg(2)); break; }
+        const dx = mariposa.x - centroX();
+        if (Math.abs(dx) > 100) { voltear(dx > 0 ? 1 : -1); avanzar(Math.min(Math.abs(dx) - 90, 3.2 * VELOCIDAD + 1)); }
+        else if (Math.random() < 0.03 && estado !== 'aire') { brincar(10 + Math.random() * 3); ladrar(1); }
+        if (tiempo < seg(1.5)) mariposa.huye = true;
+        break;
+      }
+      case 'alerta': break;
+
+      case 'ir_por_regalo':                                          // sale por la orilla a buscar algo
+        if (irHacia(orillaRegalo, velocidad() + 0.8, 6)) {
+          opacidad = Math.max(0, opacidad - 0.04);
+          if (opacidad === 0) cambiar('afuera_regalo', seg(6));
+        }
+        break;
+      case 'afuera_regalo': opacidad = 0; break;
+      case 'traer_regalo': {                                         // regresa con el regalo en el hocico
+        opacidad = Math.min(1, opacidad + 0.05);
+        const d = pantallaEn(centroX()) || displays[0];
+        const destino = Math.min(Math.max(cursor.x - dir * 70, d.x + 90), d.x + d.width - 90);
+        if (irHacia(destino, velocidad() + 0.8, 30)) {
+          const item = regaloEnBoca; regaloEnBoca = null;
+          window.mascota.dejarRegalo({ x: x + (bocaVentana ? bocaVentana.x : 150) + dir * 18, item });
+          decir(azar(['¡Te traje algo! 🎁', '¡Mira lo que encontré! 🎁', '¡Es para ti! 💕']), 0, true);
+          ladrar(1); cambiar('sentado', seg(6));
+        }
+        break;
+      }
+
+      case 'pasear': {
+        if (!paseo) { cambiar('sentado', seg(2)); break; }
+        if (olfateo > 0) { olfateo--; break; }                         // se detiene a olfatear
+        if (Math.random() < 0.003) { olfateo = seg(1.5); break; }
+        const meta = paseo.fase === 0 ? paseo.izq : paseo.fase === 1 ? paseo.der : paseo.regreso;
+        if (irHacia(meta, velocidad() + 0.6, 12)) {
+          paseo.fase++;
+          if (paseo.fase > 2) {
+            paseo = null; animo = Math.min(100, animo + 20);
+            decir('¡Qué rico paseo! 🐾', 3000);
+            window.mascota.evento({ tipo: 'paseo-fin' });
+            cambiar('sentado', seg(4));
+          }
+        }
+        break;
+      }
+
+      case 'seguir': {
+        const a = otros.find(o => o.id === siguiendoA);
+        if (!a) { siguiendoA = null; cambiar('sentado', seg(2)); break; }
+        const objetivo = a.x + OX + 70 - (a.dir || 1) * 75;
+        const dx = objetivo - centroX();
+        if (Math.abs(dx) > 14) { voltear(dx > 0 ? 1 : -1, true); avanzar(Math.min(Math.abs(dx), velocidad() + 1.2)); }
+        else voltear(a.dir || 1);
+        break;
+      }
+
+      case 'ir_jalar':
+        if (!cuerdaJuego) { cambiar('sentado', seg(2)); break; }
+        if (irHacia(cuerdaJuego.medio - cuerdaJuego.lado * 105, velocidad() + 1, 4)) {   // con espacio para la cuerda
+          voltear(cuerdaJuego.lado, true); anclaX = x; cambiar('jalar', 1e9);
+        }
+        break;
+      case 'jalar': {
+        if (!cuerdaJuego) { cambiar('sentado', seg(2)); break; }
+        const amiga = otros[0];
+        const lista = amiga && amiga.estado === 'jalar';
+        if (lista && !cuerdaJuego.arranco) {                             // ya están las dos: empieza el jaloneo
+          cuerdaJuego.arranco = true; cuerdaJuego.inicio = Date.now(); cuerdaJuego.fin = Date.now() + 12000;
+        }
+        if (cuerdaJuego.arranco) x = anclaX + desfaseCuerda();
+        if (!cuerdaJuego.arranco && Date.now() > cuerdaJuego.fin + 15000) { cuerdaJuego = null; cambiar('sentado', seg(2)); break; }
+        if (cuerdaJuego.arranco && Date.now() > cuerdaJuego.fin) {       // se acabó: una gana
+          const gane = cuerdaJuego.ganadora === ID;
+          cuerdaJuego = null;
+          if (gane) { decir(azar(['¡Gané! 💪', '¡Es mía! 🪢', '¡Soy la más fuerte! 💪']), 3000); ladrar(2); brincar(11); lanzarCorazones(3); }
+          else { decir(azar(['¡Revancha! 😤', '¡No se vale! 😤', 'Uf, qué fuerza 😅']), 3000); cambiar('sentado', seg(4)); aplaste = 1; }
+        } else if (lista && frame % 140 === 0 && Math.random() < 0.6) decir(azar(['Grrr… 😤', '¡Suéltala!', 'Grrrr 🪢']), 1500);
+        break;
+      }
+
+      case 'esconderse': {
+        if (!escondite) { cambiar('sentado', seg(2)); break; }
+        const dx = escondite.destino - centroX();
+        if (Math.abs(dx) <= 4 || Date.now() > escondite.limite) {
+          voltear(escondite.destino < centroX() + 5 && dx <= 0 ? 1 : -1, true);
+          cambiar('escondida', seg(90)); break;
+        }
+        voltear(dx > 0 ? 1 : -1, true);
+        x += Math.sign(dx) * Math.min(Math.abs(dx), 4 * VELOCIDAD + 1);  // se asoma por la orilla
+        break;
+      }
+
+      case 'buscar_amiga': {
+        const amiga = escondite && otros.find(o => o.id === escondite.amiga);
+        if (!amiga) { escondite = null; cambiar('sentado', seg(2)); break; }
+        if (Date.now() > escondite.limite + 90000) { escondite = null; decir('¿Dónde estás? 🥺', 3000); cambiar('sentado', seg(3)); break; }
+        if (Date.now() < escondite.olfatearHasta) {                    // primero olfatea por ahí
+          if (Math.random() < 0.01) voltear(-dir);
+          avanzar(velocidad() * 0.7); break;
+        }
+        if (irHacia(amiga.x + OX + 70, velocidad() + 1, 80)) {
+          decir('¡Te encontré! 😄', 3000); brincar(10); lanzarCorazones(4); ladrar(1);
+          escondite = null; window.mascota.evento({ tipo: 'encontrada' });
+        }
+        break;
+      }
+
+      case 'celos': {
+        const d = pantallaEn(centroX()) || displays[0];
+        const destino = Math.min(Math.max(cursor.x, d.x + 80), d.x + d.width - 80);
+        if (irHacia(destino, 4 * VELOCIDAD + 1, 40)) {
+          decir(azar(['¡Yo también quiero cariño! 🥺', '¿Y a mí? 🥺', '¡Hazme caso a mí también!']), 3500);
+          cambiar('sentado', seg(5));
+        }
+        break;
+      }
+
+      case 'pedir_salir_ir': {
+        const d = pantallaEn(centroX()) || displays[0];
+        const izquierda = centroX() - d.x < d.x + d.width - centroX();
+        const orilla = izquierda ? d.x + 90 : d.x + d.width - 90;
+        if (irHacia(orilla, velocidad() + 0.5, 8)) {
+          voltear(izquierda ? -1 : 1, true);
+          cambiar('pedir_salir', seg(15 * 60));                      // si no la sacas en 15 min... 😅
+          decir('¡Quiero salir! 🚪', 0, true, 'salir'); ladrar(2);
+        }
+        break;
+      }
+      case 'pedir_salir':
+        if (tiempo % seg(60) === 0) { ladrar(1); if (!bocadillo) decir('¡Porfa, quiero salir! 🚪', 0, true, 'salir'); }
+        break;
+
+      case 'salir':
+        if (irHacia(salidaOrilla, velocidad() + 0.5, 6)) {
+          opacidad = Math.max(0, opacidad - 0.03);
+          if (opacidad === 0) cambiar('afuera', seg(6));
+        }
+        break;
+
+      case 'bano':
+        if (frotado > 2500) enjuagar();
+        break;
+      case 'sacudirse':
+        if (frame % 2 === 0) gotas.push({ x: OX + 70 + (Math.random() - 0.5) * 60, y: OY + 60 + Math.random() * 30, vx: (Math.random() - 0.5) * 8, vy: -2 - Math.random() * 2 });
+        break;
+    }
+
+    if (estado !== 'aire') {
+      const s = sueloActual();
+      if (y < s.y - H - 2) { estado = 'aire'; vy = 0; vxAire = 0; }   // se acabó la repisa: cae
+      else if (y > s.y - H) y = s.y - H;
+    }
+    if (estado !== 'aire' && tiempo <= 0) {
+      if (['buscar', 'traer'].includes(estado) && tienePelota) soltarPelota(false);
+      elegirEstado();
+    }
+  }
+
+  corazones = corazones.filter(h => (h.vida -= 1) > 0);
+  corazones.forEach(h => { h.y -= 0.8; h.x += Math.sin(h.vida * 0.2) * 0.5; });
+}
+
+function actualizarEfectos() {
+  gotas = gotas.filter(g => { g.vy += 0.25; g.x += g.vx; g.y += g.vy; return g.y < H; });
+  brillos = brillos.filter(b => (b.vida -= 1) > 0);
+  confeti = confeti.filter(c => { c.vy += 0.15; c.x += c.vx; c.y += c.vy; return c.y < H && (c.vida -= 1) > 0; });
+  cepillado = Math.max(0, cepillado - 2);
+  if (opacidad < 1 && !['salir', 'afuera', 'ir_por_regalo', 'afuera_regalo', 'traer_regalo'].includes(estado)) opacidad = Math.min(1, opacidad + 0.03);
+  // Partículas según la temporada
+  const mes = new Date().getMonth() + 1;
+  const tipo = mes >= 9 && mes <= 11 ? 'hoja' : (mes === 12 || mes <= 2) ? 'nieve' : mes <= 5 ? 'petalo' : null;
+  if (tipo && particulas.length < 5 && Math.random() < 1 / 50) {
+    particulas.push({ tipo, x: OX - 20 + Math.random() * 180, y: OY - 30, vx: (Math.random() - 0.5) * 0.6, vy: 0.4 + Math.random() * 0.5,
+                      giro: Math.random() * 6, vgiro: (Math.random() - 0.5) * 0.08, color: azar(['#e07b39', '#c1440e', '#e3a72f', '#8b5a2b']) });
+  }
+  particulas = particulas.filter(q => { q.x += q.vx + Math.sin(q.y / 12) * 0.3; q.y += q.vy; q.giro += q.vgiro; return q.y < H - 4; });
+  // Fantasmita en octubre
+  if (mes === 10 && PRINCIPAL && !fantasma && Math.random() < 1 / (60 * 150) && !trabajando()) {
+    fantasma = { x: dir === 1 ? OX + 150 : OX - 30, y: OY + 10, vida: 360 };
+    if (Math.random() < 0.5 && !ocupada()) { decir('¡Un fantasma! 😱', 2000); ladrar(2); }
+  }
+  if (fantasma) { fantasma.x += dir === 1 ? 0.3 : -0.3; if ((fantasma.vida -= 1) <= 0) fantasma = null; }
+}
+
+// Cuerda de juguete: de su hocico a la mitad del camino con el hocico de su amiga (la otra mitad la dibuja ella)
+function dibujarCuerda() {
+  const b = { x: bocaVentana.x - dir * 2, y: bocaVentana.y + 6 };
+  const amiga = otros[0];
+  let fin, tensa;
+  if (amiga && amiga.estado === 'jalar' && amiga.boca) {
+    const ob = { x: amiga.boca.x - x - (amiga.dir || -dir) * 2, y: amiga.boca.y - y + 6 };
+    fin = { x: (b.x + ob.x) / 2, y: (b.y + ob.y) / 2 };
+    tensa = true;
+  } else fin = { x: b.x + dir * 26, y: b.y + 16 };                     // todavía no llega su amiga: cuelga
+  const t = (Date.now() - (cuerdaJuego ? cuerdaJuego.inicio : 0)) / 1000;
+  const comba = tensa ? 2 + 2 * Math.sin(t * 5.2) : 10;
+  const cx = (b.x + fin.x) / 2, cy = (b.y + fin.y) / 2 + comba;
+  const camino = () => { ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.quadraticCurveTo(cx, cy, fin.x, fin.y); };
+  ctx.save(); ctx.lineCap = 'round';
+  camino(); ctx.strokeStyle = '#7a1f2b'; ctx.lineWidth = 6.5; ctx.stroke();                    // orilla
+  camino(); ctx.strokeStyle = '#e63946'; ctx.lineWidth = 4.5; ctx.stroke();
+  ctx.setLineDash([4, 4]); ctx.lineDashOffset = -t * 30 * dir;                               // rayas trenzadas
+  camino(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.2; ctx.stroke();
+  ctx.restore();
+  elipse(b.x + dir * 3, b.y, 4.5, 4, '#c62828', '#7a1f2b');                                  // nudo en el hocico
+  if (!tensa) elipse(fin.x, fin.y, 4, 3.6, '#c62828', '#7a1f2b');
+}
+
+function soltarPelota(orgulloso, lanza = null) {
+  if (!tienePelota) return;
+  tienePelota = false;
+  const bx = bocaVentana ? x + bocaVentana.x + dir * 14 : x + OX + 10 + (dir === 1 ? 140 : -20);
+  const by = bocaVentana ? y + bocaVentana.y + 4 : y + OY + 20 + 52;
+  if (lanza) { window.mascota.soltarPelota({ x: bx, y: by, vx: lanza.vx, vy: lanza.vy, lanza: true }); ignorarPelotaHasta = Date.now() + 2500; return; }
+  window.mascota.soltarPelota({ x: bx, y: by, vx: dir * 2.5, vy: -4, cansada: estado === 'cansada_pelota' });
+  if (orgulloso) {
+    animo = Math.min(100, animo + 8);
+    cambiar('sentado', seg(4));
+    if (Math.random() < 0.5) decir(azar(['¡Otra vez! 🎾', '¡Aquí está! 🐶', '¡Aviéntala otra vez!']), 2500);
+    ladrar(1);
+  }
+}
+
+// =====================================================================
+// 6b) ILUSTRACIONES (sprites): Nala usa dibujos hechos a partir de su foto
+// =====================================================================
+const SPR = (ID === 'chispa' ? window.SPRITES_CHISPA : window.SPRITES_PIMIENTA) || null;
+const IMG = {};
+if (SPR) for (const n of Object.keys(SPR)) { const im = new Image(); im.src = `sprites/${ID}/${n}.png`; IMG[n] = im; }
+// Poses con animación hecha en EffectCraft (títere): cuadros sprites/<perrita>/anim/<pose>_00.webp ...  (30 cuadros = 1 s)
+const ANIM = {};   // pose -> [Image]
+const POSES_ANIM = { parada: 30, sentada: 30, sentada_feliz: 30, acostada: 30, dormida: 60 };
+const ANIM_N = ({ chispa: POSES_ANIM, pimienta: POSES_ANIM })[ID] || {};
+const cargar = src => { const im = new Image(); im.src = src; return im; };
+for (const [n, c] of Object.entries(ANIM_N)) {
+  ANIM[n] = Array.from({ length: c }, (_, i) => cargar(`sprites/${ID}/anim/${n}_${String(i).padStart(2, '0')}.webp`));
+}
+// Cola que menea al caminar/correr: 8 variantes de cada dibujo; se elige por tiempo, no por el paso de las patas
+const COLA_POSES = ({ chispa: ['caminar1', 'caminar3', 'caminar4', 'correr1', 'correr3', 'correr4'], pimienta: ['caminar1', 'caminar4', 'correr1', 'correr4'] })[ID] || [];
+const COLA = {};
+for (const n of COLA_POSES) COLA[n] = Array.from({ length: 8 }, (_, i) => cargar(`sprites/${ID}/anim/cola_${n}_${i}.webp`));
+const imgDe = n => ANIM[n] ? ANIM[n][Math.floor(frame / 2) % ANIM[n].length]
+                 : COLA[n] ? COLA[n][Math.floor(frame / 3) % 8] : IMG[n];
+// Si alguna pose no existe para esta perrita, se usa la más parecida
+const RESPALDO = { caminar2: 'caminar1', caminar3: 'caminar4', correr3: 'correr1', salto: 'correr1',
+                   panza_dormida: 'panza_feliz', sentada_feliz: 'sentada', comer2: 'comer1', cargada: 'parada' };
+const pose_ = n => SPR[n] ? n : (SPR[RESPALDO[n]] ? RESPALDO[n] : 'parada');
+const spritesListos = () => SPR && Object.values(IMG).every(im => im.complete && im.naturalWidth > 0) && [ANIM, COLA].every(M => Object.values(M).every(l => l.every(im => im.complete && im.naturalWidth > 0)));
+const lienzo = document.createElement('canvas'), lctx = lienzo.getContext('2d');
+let cajaPerro = { x1: OX + 10, x2: OX + 132, y1: OY + 15, y2: OY + 118 };   // zona donde se le puede dar clic
+let bocaVentana = null, aplaste = 0;
+const NARIZ = 55;                                  // la nariz siempre queda a 55 px del centro (así no "brinca")
+const CAMINAR = !SPR ? [] : (SPR.caminar2 ? ['caminar1', 'caminar2', 'caminar3', 'caminar4']
+              : SPR.caminar3 ? ['caminar1', 'caminar4', 'caminar3', 'caminar4'] : ['caminar1', 'caminar4'].filter(n => SPR[n]));
+const CORRER = SPR ? ['correr1', 'correr4', 'correr3', 'correr4'].filter(n => SPR[n]) : [];
+const pasoCaminar = CAMINAR.length <= 2 ? 1.5 : 1.2;    // cada cuadro dura un poquito más
+const ciclo = (lista, cada) => lista[Math.floor(frame / cada) % lista.length];
+const cicloPasos = (lista, px) => lista[Math.floor(recorrido / (px * TAM())) % lista.length];   // cuadro según lo que avanzó
+
+function spriteDe() {
+  const feliz = animo > 60 || haceCalor();
+  const sentada = feliz ? 'sentada_feliz' : 'sentada';
+  switch (estado) {
+    case 'caminar': case 'pasear': case 'seguir': case 'ir_beber': case 'ir_cama': case 'ir_jalar':
+    case 'pedir_salir_ir': case 'salir': case 'ir_comer': case 'ir_amigo': case 'ir_trepar':
+      return { n: cicloPasos(CAMINAR, 13 * pasoCaminar), bob: Math.abs(Math.sin(recorrido / (13 * pasoCaminar * TAM()) * Math.PI)) * 1.8 };
+    case 'buscar_amiga': case 'olfatear': return { n: cicloPasos(CAMINAR, 13 * pasoCaminar), bob: 1 };
+    case 'correr': case 'buscar': case 'traer': case 'perseguir_laser': case 'esconderse': case 'celos':
+      return { n: cicloPasos(CORRER, 19), bob: Math.abs(Math.sin(recorrido / (19 * TAM()) * Math.PI)) * 4 };
+    case 'cola': return { n: ciclo(CORRER, 6), bob: Math.abs(Math.sin(frame * 0.3)) * 6 };
+    case 'teclear': return { n: sentada, bob: Math.floor(frame / 8) % 2 ? 1.5 : 0 };
+    case 'rascar': return { n: 'sentada_feliz', rot: Math.sin(frame * 1.2) * 0.03 };
+    case 'sentado': {
+      const curiosa = Date.now() < cursorMovidoHasta && Math.abs(cursor.x - centroX()) < 160 && cursor.y < pies() - 130;
+      return { n: sentada, rot: curiosa ? -0.06 : 0 };
+    }
+    case 'pedir_salir': case 'escondida': case 'comer_galleta': case 'bano': return { n: sentada };
+    case 'pata': return { n: 'pata' };
+    case 'cazar_mariposa': return { n: cicloPasos(CORRER, 19), bob: Math.abs(Math.sin(recorrido / (19 * TAM()) * Math.PI)) * 3 };
+    case 'alerta': return { n: 'parada', rot: -0.03, bob: frame % 40 < 20 ? 1.5 : 0 };
+    case 'tropiezo': return { n: 'acostada', rot: 0.18 * Math.max(0, tiempo / seg(1.2)) };
+    case 'ir_por_regalo': case 'traer_regalo': return { n: cicloPasos(CAMINAR, 13 * pasoCaminar), bob: Math.abs(Math.sin(recorrido / (13 * pasoCaminar * TAM()) * Math.PI)) * 1.8 };
+    case 'afuera_regalo': return { n: 'parada' };
+    case 'bostezar': return { n: 'sentada_feliz', rot: -0.04 - Math.sin(frame * 0.06) * 0.03 };
+    case 'celebrar': return { n: Math.floor(frame / 16) % 2 ? 'sentada_feliz' : 'pata', bob: Math.abs(Math.sin(frame * 0.25)) * 5 };
+    case 'llevar_amiga': return { n: cicloPasos(CORRER, 19), bob: Math.abs(Math.sin(recorrido / (19 * TAM()) * Math.PI)) * 3 };
+    case 'lanzar_sola': return { n: 'parada', rot: Math.sin(frame * 0.5) * 0.08 };
+    case 'cansada_pelota': return { n: 'sentada' };
+    case 'aire': return { n: 'salto', sombra: false };
+    case 'arrastrado': return { n: 'cargada', sombra: false, rot: Math.sin(frame * 0.15) * 0.06 };
+    case 'estirar': return { n: 'estirar' };
+    case 'dormir': return { n: 'dormida', respira: true };
+    case 'acurrucado': case 'triste': case 'roer': return { n: 'acostada', respira: estado !== 'roer' };
+    case 'panza': return { n: Math.floor(frame / 45) % 2 ? 'panza_feliz' : 'panza', rot: Math.sin(frame * 0.25) * 0.03 };
+    case 'muertita': return { n: 'panza_dormida' };
+    case 'rodar': return { n: 'panza_feliz', giro: (frame * 0.12) % (Math.PI * 2) };
+    case 'comer': case 'beber': return { n: Math.floor(frame / 14) % 2 ? 'comer2' : 'comer1' };
+    case 'sacudirse': return { n: 'parada', rot: Math.sin(frame * 1.1) * 0.08 };
+    case 'jalar': return { n: 'estirar', rot: -0.05 + Math.sin(frame * 0.35) * 0.025 };
+    default: return { n: 'parada' };
+  }
+}
+
+// ---- Transiciones suaves ----
+const capa = document.createElement('canvas'); capa.width = W; capa.height = H;
+const capaVieja = document.createElement('canvas'); capaVieja.width = W; capaVieja.height = H;
+let claveAnterior = '', mezcla = 0;
+const familia = n => n.replace(/\d+$/, '').replace(/_feliz$/, '');      // caminar1..4 son la misma familia
+function dibujarConTransicion() {
+  const clave = familia(pose_(spriteDe().n));
+  if (claveAnterior && clave !== claveAnterior) {                     // cambió de pose: guardo cómo se veía
+    const c = capaVieja.getContext('2d'); c.clearRect(0, 0, W, H); c.drawImage(capa, 0, 0);
+    mezcla = 1;
+  }
+  claveAnterior = clave;
+  const principal = ctx;                                              // dibujo la pose nueva en su capa
+  const cc = capa.getContext('2d'); cc.clearRect(0, 0, W, H);
+  ctx = cc; try { dibujarSprite(); } finally { ctx = principal; }
+  if (mezcla > 0) {
+    ctx.save(); ctx.globalAlpha = mezcla; ctx.drawImage(capaVieja, 0, 0); ctx.restore();
+    ctx.save(); ctx.globalAlpha = 1 - mezcla * 0.6; ctx.drawImage(capa, 0, 0); ctx.restore();
+    mezcla = Math.max(0, mezcla - 0.14);                              // ~7 cuadros (un instante)
+  } else ctx.drawImage(capa, 0, 0);
+}
+
+function dibujarSprite() {
+  const sp = spriteDe(); sp.n = pose_(sp.n);
+  const d = SPR[sp.n], img = imgDe(sp.n);
+  const w = d.w, h = d.h;
+  // 1) La perrita en un lienzo aparte, con ropa y lodo pintados solo encima de ella
+  lienzo.width = Math.ceil(w * 2); lienzo.height = Math.ceil(h * 2);
+  lctx.drawImage(img, 0, 0, lienzo.width, lienzo.height);
+  lctx.globalCompositeOperation = 'source-atop';
+  const erguida = !['dormida', 'acostada', 'panza', 'panza_feliz', 'panza_dormida'].includes(sp.n);
+  const torso = zonaCuerpo(sp.n);                                     // x, y, ancho, alto (fracciones)
+  const T = [torso[0] * lienzo.width, torso[1] * lienzo.height, torso[2] * lienzo.width, torso[3] * lienzo.height];
+  if (accesorioActual() === 'calabaza') {                // disfraz de calabaza 🎃 (con la sombra del pelo)
+    const cx2 = T[0] + T[2] / 2, cy2 = T[1] + T[3] / 2;
+    lctx.save(); lctx.beginPath(); lctx.ellipse(cx2, cy2, T[2] / 2, T[3] / 2, 0, 0, Math.PI * 2); lctx.clip();
+    const gr = lctx.createLinearGradient(0, T[1], 0, T[1] + T[3]);
+    gr.addColorStop(0, '#ffad4a'); gr.addColorStop(1, '#e0761a');
+    lctx.fillStyle = gr; lctx.fillRect(T[0], T[1], T[2], T[3]);
+    lctx.globalCompositeOperation = 'multiply'; lctx.globalAlpha = 0.45; lctx.drawImage(img, 0, 0, lienzo.width, lienzo.height);   // conserva los pliegues
+    lctx.globalCompositeOperation = 'source-atop'; lctx.globalAlpha = 1;
+    lctx.strokeStyle = 'rgba(150,70,10,0.55)'; lctx.lineWidth = 3;
+    for (let q = -1; q <= 1; q++) { lctx.beginPath(); lctx.ellipse(cx2 + q * T[2] / 4.5, cy2, T[2] / 7, T[3] / 2.05, 0, 0, Math.PI * 2); lctx.stroke(); }
+    lctx.restore();
+    lctx.save(); lctx.strokeStyle = 'rgba(120,55,5,0.9)'; lctx.lineWidth = 3;  // orilla del disfraz
+    lctx.beginPath(); lctx.ellipse(cx2, cy2, T[2] / 2 - 1.5, T[3] / 2 - 1.5, 0, 0, Math.PI * 2); lctx.stroke(); lctx.restore();
+  }
+  if (suciedad > 35) {                                                // manchitas de lodo
+    const manchas = Math.min(6, Math.floor((suciedad - 35) / 11) + 1);
+    lctx.fillStyle = 'rgba(110,75,40,0.85)';
+    [[0.3, 0.45], [0.55, 0.7], [0.4, 0.85], [0.65, 0.4], [0.2, 0.7], [0.5, 0.25]].slice(0, manchas).forEach(([fx, fy], k) => {
+      lctx.beginPath(); lctx.ellipse(T[0] + fx * T[2], T[1] + fy * T[3], 11 - k, 8 - k / 2, 0.4, 0, Math.PI * 2); lctx.fill();
+    });
+  }
+  lctx.globalCompositeOperation = 'source-over';
+
+  // 2) Colocarla en la ventana: centro abajo, mirando hacia donde camina
+  const CX = 150, BASE = H - 4;
+  // Volteo animado: se "gira" en vez de cambiar de lado de golpe
+  if (dirVis !== dir && giroT === 0) giroT = 1;
+  if (giroT > 0) { giroT = Math.max(0, giroT - 0.11); if (giroT <= 0.5) dirVis = dir; }
+  const dv = dirVis, fx = giroT > 0 ? Math.max(0.12, Math.abs(giroT * 2 - 1)) : 1;
+  let sx = (1 + Math.min(peso, 100) / 400) * TAM(), sy = TAM();      // gordita si come muchas galletas
+  if (sp.respira && !ANIM[sp.n]) sy *= 1 + Math.sin(frame * 0.05) * 0.02;
+  if (aplaste > 0) { sx *= 1 + aplaste * 0.12; sy *= 1 - aplaste * 0.15; aplaste = Math.max(0, aplaste - 0.08); }
+  if (estado === 'aire' && vy < -2) { sy *= 1 + Math.min(0.1, -vy / 120); sx *= 1 - Math.min(0.06, -vy / 200); }   // se estira al saltar
+  const x0 = NARIZ - d.boca[0];                                       // posición del dibujo respecto al centro
+  ctx.save();
+  ctx.globalAlpha = opacidad;
+  // sombrita en el piso
+  if (sp.sombra !== false && opacidad > 0.5) {
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.beginPath(); ctx.ellipse(CX + dv * (x0 + w / 2) * sx, BASE + 1, w * 0.38 * sx * fx + 4, 5 * TAM(), 0, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.translate(CX, BASE - (sp.bob || 0));
+  if (enCama && estado === 'dormir') ctx.translate(0, -12);
+  if (dv === -1) ctx.scale(-1, 1);
+  ctx.scale(sx, sy);
+  if (fx < 1) { ctx.translate(x0 + w / 2, 0); ctx.scale(fx, 1); ctx.translate(-(x0 + w / 2), 0); }
+  if (sp.rot) ctx.rotate(sp.rot);
+  if (sp.giro) { ctx.translate(x0 + w / 2, -h / 2); ctx.rotate(sp.giro); ctx.translate(-(x0 + w / 2), h / 2); }
+  ctx.drawImage(lienzo, x0, -h, w, h);
+  // 3) Accesorios en la cabeza y cosas en el hocico (con las mismas medidas del dibujo anterior)
+  const k = 1.25, cab = [x0 + d.cabeza[0], -h + d.cabeza[1]], boca = [x0 + d.boca[0], -h + d.boca[1]];
+  const an = (ANCLAS[ID] || {})[sp.n];
+  const deEspaldas = ['panza', 'panza_feliz', 'panza_dormida'].includes(sp.n);
+  let topeSombrero = an ? -h + an[1] : cab[1];
+  if (an && !deEspaldas) {
+    // Medidas marcadas a mano en cada pose: cabeza [x, y, ancho, inclinación] y cuello [x, y]
+    const [hx, hy, ancho, ang, nx, ny] = an;
+    const kc = ancho / 36;                                              // tamaño del accesorio según su cabeza
+    const acc = accesorioActual();
+    const enCuello = ['collar', 'paliacate', 'patrio'].includes(acc);
+    const cuelloVisible = !['dormida', 'estirar', 'comer1', 'comer2'].includes(sp.n);
+    if (cuelloVisible && (haceFrio() || enCuello)) {
+      ctx.save(); ctx.translate(x0 + nx, -h + ny); ctx.rotate(ang * 0.6); ctx.scale(kc, kc);
+      if (haceFrio()) dibujarBufandaCuello(); else dibujarCuello(acc);
+      ctx.restore();
+    }
+    if (!enCuello && acc !== 'ninguno') {
+      ctx.save(); ctx.translate(x0 + hx, -h + hy - 1 * kc); ctx.rotate(ang); ctx.scale(-kc, kc); ctx.translate(-88, 0);   // espejo: la punta cae hacia atrás
+      dibujarAccesorioCabeza();
+      ctx.restore();
+      if (['bruja', 'navidad', 'fiesta'].includes(acc)) topeSombrero = -h + hy - 30 * kc;
+      else if (acc === 'muertos') topeSombrero = -h + hy - 8 * kc;
+      else if (acc === 'calabaza') topeSombrero = -h + hy - 10 * kc;
+      else if (acc === 'gorro_calabaza') topeSombrero = -h + hy - 26 * kc;
+      else if (acc === 'murcielago') topeSombrero = -h + hy - 18 * kc;
+    }
+    if (llueve() && !['bano', 'arrastrado'].includes(estado))
+      dibujarSombrillaLocal(x0 + nx - ancho * 0.7, -h + ny + 2, topeSombrero - (sp.n.startsWith('comer') ? 14 : 0), ancho, CX, BASE - (sp.bob || 0), sx, sy);
+  } else if (!deEspaldas) {
+    ctx.save(); ctx.translate(cab[0], cab[1] + 6); ctx.scale(k, k); ctx.translate(-88, 0);
+    if (haceFrio() && erguida && !sp.n.startsWith('comer')) dibujarBufanda();
+    else if (erguida || !['collar', 'paliacate', 'patrio'].includes(accesorioActual())) dibujarAccesorioCabeza();
+    ctx.restore();
+  }
+  if (deEspaldas && llueve() && !['bano', 'arrastrado'].includes(estado))
+    dibujarSombrillaLocal(x0 + w * 0.55, -h * 0.6, -h - 4, 32, CX, BASE - (sp.bob || 0), sx, sy);
+  if (regaloEnBoca && estado === 'traer_regalo') {
+    ctx.save(); ctx.translate(boca[0] - 2, boca[1] + 9); ctx.scale(k, k); dibujarRegaloBoca(regaloEnBoca); ctx.restore();
+  }
+  if (tienePelota || estado === 'roer' || (estado === 'comer_galleta' && frame % 30 < 22)) {
+    ctx.save(); ctx.translate(boca[0] - 4, boca[1] + 10); ctx.scale(k, k);
+    if (tienePelota) { elipse(0, 0, 8, 8, '#d4ec4a', '#8fa51f'); ctx.beginPath(); ctx.arc(-7, 0, 6, -0.9, 0.9); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    else if (estado === 'roer') { trazo([[-10, 0], [12, 0]], 5, '#f5f0e1', false); [[-11, -3], [-11, 3], [13, -3], [13, 3]].forEach(([hx, hy]) => elipse(hx, hy, 3.5, 3.5, '#f5f0e1', '#c9bfa5')); }
+    else if (estado === 'comer_galleta') { elipse(0, 0, 6, 6, '#c68642', '#8b5a2b'); }
+    else trazo([[0, 0], [12, 2]], 4, '#e63946', false);
+    ctx.restore();
+  }
+  if (estado === 'bano') {                                            // tina
+    ctx.save(); ctx.globalAlpha = 0.95;
+    const tx1 = x0 - 6, tx2 = x0 + w + 6;
+    poligono([[tx1, -34], [tx2, -34], [tx2 - 8, 0], [tx1 + 8, 0]], '#e9f4fb', '#8fb8d1');
+    elipse((tx1 + tx2) / 2, -34, (tx2 - tx1) / 2, 6, '#cfe8f7', '#8fb8d1');
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // 4) Zona de clic y posición del hocico en la ventana
+  const izq = dv === 1 ? CX + x0 * sx : CX - (x0 + w) * sx;
+  cajaPerro = { x1: izq, x2: izq + w * sx, y1: BASE - h * sy - (sp.bob || 0), y2: BASE };
+  bocaVentana = { x: CX + dv * boca[0] * sx, y: BASE + boca[1] * sy };
+  if (!SPR || !ANCLAS[ID]) {
+    const sombrero = ['bruja', 'navidad', 'fiesta', 'muertos'].includes(accesorioActual()) && !deEspaldas;
+    if (llueve() && !['bano', 'arrastrado'].includes(estado)) dibujarSombrilla(cajaPerro, CX + dir * (cab[0] - 18) * sx, sombrero ? 34 : 0);
+  }
+}
+
+// Puntos marcados a mano en cada dibujo: [cabezaX, cabezaY, anchoCabeza, inclinación, cuelloX, cuelloY]
+const ANCLAS = {
+  chispa: {
+    parada: [87, 6, 32, 0, 88, 42],        sentada: [96, 7, 32, 0, 99, 45],      sentada_feliz: [90, 6, 32, 0, 97, 45],
+    caminar1: [93, 6, 32, 0, 97, 46],      caminar3: [121, 6, 32, 0, 126, 47],   caminar4: [98, 6, 32, 0, 103, 47],
+    correr1: [100, 7, 32, 0.05, 106, 46],  correr3: [112, 10, 32, 0.1, 116, 49], correr4: [98, 8, 32, 0.05, 101, 47],
+    comer1: [104, 41, 32, 0.5, 97, 52],    comer2: [104, 36, 32, 0.45, 97, 50],  pata: [86, 7, 32, 0, 84, 48],
+    cargada: [88, 7, 32, 0, 77, 49],       estirar: [93, 45, 32, 0.05, 88, 72],  acostada: [104, 6, 32, 0, 107, 42],
+    dormida: [122, 14, 30, 0.15, 101, 27]
+  },
+  pimienta: {
+    parada: [63, 6, 26, 0, 63, 40],        sentada: [74, 6, 26, 0, 68, 42],      sentada_feliz: [74, 6, 26, 0, 68, 42],
+    caminar1: [66, 6, 26, 0, 66, 41],      caminar4: [70, 6, 26, 0, 69, 42],     correr1: [82, 6, 26, 0.05, 76, 40],
+    correr4: [71, 6, 26, 0.05, 70, 40],    comer1: [84, 12, 26, 0.25, 75, 32],   comer2: [84, 12, 26, 0.25, 75, 32],
+    pata: [65, 6, 26, 0, 65, 40],          cargada: [35, 6, 26, 0, 35, 53],      estirar: [74, 9, 26, 0.05, 70, 40],
+    acostada: [75, 6, 26, 0, 72, 40],      dormida: [86, 8, 26, 0.1, 80, 26]
+  }
+};
+
+// Collar, paliacate y paliacate patrio, dibujados con el cuello en (0, 0)
+function dibujarCuello(acc) {
+  if (acc === 'collar') {
+    ctx.save(); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-6, -4); ctx.quadraticCurveTo(-1, 3, 6, 5);
+    ctx.strokeStyle = '#6d0d18'; ctx.lineWidth = 6; ctx.stroke();
+    ctx.strokeStyle = '#d7263d'; ctx.lineWidth = 4; ctx.stroke();
+    ctx.restore();
+    trazo([[3.5, 5], [4, 8]], 1.4, '#9e7a12', false);
+    elipse(4.3, 10.5, 3.2, 3.2, '#f4c542', '#9e7a12');                  // placa dorada
+    elipse(3.4, 9.6, 1.1, 0.9, '#fff5c2', null);
+    return;
+  }
+  const tri = [[-7, -4], [8, 5], [1, 17]];                              // pañuelo bajo la barbilla
+  ctx.save();
+  ctx.beginPath(); ctx.moveTo(...tri[0]); ctx.lineTo(...tri[1]); ctx.lineTo(...tri[2]); ctx.closePath(); ctx.clip();
+  if (acc === 'patrio') {
+    [['#006847', -12], ['#ffffff', -3], ['#ce1126', 6]].forEach(([col, x0]) => { ctx.fillStyle = col; ctx.fillRect(x0, -8, 9, 30); });
+  } else {
+    ctx.fillStyle = '#c8102e'; ctx.fillRect(-10, -8, 22, 30);
+    ctx.fillStyle = 'rgba(0,0,0,0.15)'; ctx.fillRect(-10, 8, 22, 14);
+    ctx.fillStyle = '#ffffff';
+    [[-2, 1], [3, 4], [1, 10], [-4, 4]].forEach(([px, py]) => { ctx.beginPath(); ctx.arc(px, py, 1.1, 0, Math.PI * 2); ctx.fill(); });
+  }
+  ctx.restore();
+  ctx.save(); ctx.beginPath(); ctx.moveTo(...tri[0]); ctx.lineTo(...tri[1]); ctx.lineTo(...tri[2]); ctx.closePath();
+  ctx.strokeStyle = 'rgba(60,10,10,0.8)'; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.lineCap = 'round'; ctx.strokeStyle = acc === 'patrio' ? '#006847' : '#9e0c22'; ctx.lineWidth = 2.6;   // nudo
+  ctx.beginPath(); ctx.moveTo(-7, -4); ctx.lineTo(8, 5); ctx.stroke();
+  ctx.restore();
+}
+
+// Bufanda tejida a rayas, con el cuello en (0, 0)
+function dibujarBufandaCuello() {
+  const [c1, c2] = PRINCIPAL ? ['#c62828', '#f4f4f4'] : ['#1e88a8', '#f4f4f4'];
+  const meneo = Math.sin(frame * 0.12) * 1.5;
+  const franjas = (p, ancho) => {                                       // tira con rayas
+    ctx.save(); ctx.lineCap = 'butt';
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = ancho + 1.6; p(); ctx.stroke();
+    ctx.strokeStyle = c1; ctx.lineWidth = ancho; p(); ctx.stroke();
+    ctx.setLineDash([2.5, 3.5]); ctx.strokeStyle = c2; ctx.lineWidth = ancho; p(); ctx.stroke();
+    ctx.restore();
+  };
+  franjas(() => { ctx.beginPath(); ctx.moveTo(2, 5); ctx.lineTo(0 + meneo, 17); }, 5);   // la punta que cuelga
+  for (let f = -1; f <= 1; f++) trazo([[f * 1.6 + meneo, 17.5], [f * 1.6 + meneo, 21]], 1.1, c1, false);
+  franjas(() => { ctx.beginPath(); ctx.moveTo(-7, -4); ctx.quadraticCurveTo(-1, 4, 8, 5); }, 7.5);   // vuelta al cuello
+}
+
+// Sombrilla recargada en su hombro: el gancho en la espalda y la tela arriba del sombrero
+function dibujarSombrillaLocal(mx, my, tope, ancho, CX, base, sx, sy) {
+  const r = Math.max(38, Math.min(62, ancho * 1.9));
+  const yBorde = Math.min(tope - 6, my - 46);                         // un poco arriba de la cabeza (o del sombrero)
+  const tipX = mx + 6, tipY = yBorde - r * 0.75;
+  const ladeo = Math.sin(frame * 0.03) * 0.04 - 0.1;
+  const [c1, c2, osc] = PRINCIPAL ? ['#e53935', '#ffffff', '#b71c1c'] : ['#3f8fd8', '#e8f3ff', '#2a6aa8'];
+  ctx.save();
+  ctx.translate(mx, my); ctx.rotate(ladeo); ctx.translate(-mx, -my);
+  ctx.strokeStyle = '#5d4037'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';           // bastón con gancho en la espalda
+  ctx.beginPath(); ctx.moveTo(tipX, tipY); ctx.lineTo(mx, my - 4); ctx.arc(mx - 5, my - 4, 5, 0, Math.PI); ctx.stroke();
+  const cx = tipX, gajos = 6;
+  for (let i = 0; i < gajos; i++) {
+    const a0 = Math.PI + (i / gajos) * Math.PI, a1 = Math.PI + ((i + 1) / gajos) * Math.PI;
+    ctx.beginPath(); ctx.moveTo(cx, tipY);
+    ctx.lineTo(cx + Math.cos(a0) * r, yBorde);
+    ctx.quadraticCurveTo(cx + Math.cos((a0 + a1) / 2) * r * 0.82, yBorde + 5, cx + Math.cos(a1) * r, yBorde);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(0, tipY, 0, yBorde + 4);
+    g.addColorStop(0, i % 2 ? c2 : c1); g.addColorStop(1, i % 2 ? '#d9d9d9' : osc);
+    ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = 'rgba(40,20,20,0.55)'; ctx.lineWidth = 1.2; ctx.stroke();
+  }
+  ctx.beginPath(); ctx.ellipse(cx - r * 0.35, yBorde - r * 0.33, r * 0.22, r * 0.07, -0.5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fill();
+  ctx.fillStyle = '#5d4037'; ctx.beginPath(); ctx.arc(cx, tipY - 3, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  const xa = CX + dirVis * (cx - r) * sx, xb = CX + dirVis * (cx + r) * sx;          // para que la lluvia no caiga debajo
+  sombrillaZona = { x1: Math.min(xa, xb) - 4, x2: Math.max(xa, xb) + 4, y: base + tipY * sy };
+}
+
+// Zona del cuerpo (sin cabeza ni patas) en cada pose, para la ropa y el lodo
+function zonaCuerpo(n) {
+  if (n.startsWith('sentada') || n === 'pata') return [0.22, 0.38, 0.42, 0.42];
+  if (n === 'acostada' || n === 'dormida') return [0.14, 0.28, 0.55, 0.5];
+  if (n.startsWith('panza')) return [0.2, 0.25, 0.55, 0.45];
+  if (n === 'estirar') return [0.1, 0.25, 0.5, 0.42];
+  if (n === 'cargada') return [0.25, 0.3, 0.45, 0.35];
+  if (n.startsWith('comer')) return [0.12, 0.2, 0.55, 0.4];
+  return [0.14, 0.32, 0.56, 0.36];                                     // de pie, caminando, corriendo
+}
+
+// Bufanda tejida (cuando hace frío) — mismas coordenadas que el collar
+function dibujarBufanda() {
+  const color = PRINCIPAL ? '#c62828' : '#1e88a8';
+  const meneo = Math.sin(frame * 0.12) * 3;
+  trazo([[73, 34], [66 + meneo / 2, 46], [62 + meneo, 56]], 7, color, false);           // la punta que cuelga
+  for (let f = 0; f < 3; f++) trazo([[60 + meneo + f * 2.5, 56], [59 + meneo + f * 2.5, 61]], 1.5, '#ffffff', false);
+  ctx.save();
+  ctx.beginPath(); ctx.moveTo(64, 26); ctx.quadraticCurveTo(76, 40, 92, 33); ctx.lineWidth = 11; ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 13; ctx.stroke();
+  ctx.strokeStyle = color; ctx.lineWidth = 11; ctx.stroke();
+  ctx.setLineDash([3, 5]); ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 2; ctx.stroke();      // puntadas
+  ctx.restore();
+}
+
+// Sombrilla que sostiene sobre su cabeza cuando llueve
+function dibujarSombrilla(caja, cxCab, extra = 0) {
+  const ancho = Math.max(90, Math.min(140, (caja.x2 - caja.x1) * 0.95));
+  const r = ancho / 2;
+  const cx = (cxCab * 0.6 + (caja.x1 + caja.x2) / 2 * 0.4);
+  const yBorde = Math.max(r * 0.75 + 8, caja.y1 - 8 - extra);
+  const ladeo = Math.sin(frame * 0.03) * 0.05 - dir * 0.08;
+  const [c1, c2] = PRINCIPAL ? ['#e53935', '#ffffff'] : ['#3f8fd8', '#e8f3ff'];
+  ctx.save();
+  ctx.translate(cx, yBorde); ctx.rotate(ladeo);
+  // bastón con su gancho
+  ctx.strokeStyle = '#5d4037'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(0, -r * 0.75); ctx.lineTo(0, 26); ctx.arc(-5, 26, 5, 0, Math.PI); ctx.stroke();
+  // tela por gajos
+  const gajos = 6;
+  for (let i = 0; i < gajos; i++) {
+    const a0 = Math.PI + (i / gajos) * Math.PI, a1 = Math.PI + ((i + 1) / gajos) * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(0, -r * 0.75);
+    ctx.lineTo(Math.cos(a0) * r, 0);
+    const mx = Math.cos((a0 + a1) / 2) * r * 0.82, my = 5;                   // borde ondulado
+    ctx.quadraticCurveTo(mx, my, Math.cos(a1) * r, 0);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(0, -r * 0.75, 0, 4);
+    const base = i % 2 ? c2 : c1;
+    g.addColorStop(0, base); g.addColorStop(1, i % 2 ? '#d9d9d9' : (PRINCIPAL ? '#b71c1c' : '#2a6aa8'));
+    ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = 'rgba(40,20,20,0.55)'; ctx.lineWidth = 1.2; ctx.stroke();
+  }
+  // brillo y puntita
+  ctx.beginPath(); ctx.ellipse(-r * 0.35, -r * 0.42, r * 0.22, r * 0.07, -0.5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fill();
+  ctx.fillStyle = '#5d4037'; ctx.beginPath(); ctx.arc(0, -r * 0.75 - 3, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  sombrillaZona = { x1: cx - r - 4, x2: cx + r + 4, y: yBorde - r * 0.75 };
+}
+let sombrillaZona = null;
+
+// =====================================================================
+// 7) HERRAMIENTAS DE DIBUJO
+// =====================================================================
+function elipse(cx, cy, rx, ry, relleno, borde = C.borde, rot = 0) {
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, rot, 0, Math.PI * 2);
+  ctx.fillStyle = relleno; ctx.fill();
+  if (borde) { ctx.strokeStyle = borde; ctx.lineWidth = 2; ctx.stroke(); }
+}
+function trazo(puntos, grosor, color, conBorde = true) {
+  const pasadas = conBorde ? [[grosor + 2, C.borde], [grosor, color]] : [[grosor, color]];
+  for (const [g, c] of pasadas) {
+    ctx.beginPath(); ctx.lineWidth = g; ctx.strokeStyle = c; ctx.lineCap = 'round';
+    ctx.moveTo(...puntos[0]);
+    if (puntos.length === 3) ctx.quadraticCurveTo(...puntos[1], ...puntos[2]);
+    else ctx.lineTo(...puntos[1]);
+    ctx.stroke();
+  }
+}
+function poligono(puntos, relleno, borde = C.borde) {
+  ctx.beginPath(); ctx.moveTo(...puntos[0]);
+  puntos.slice(1).forEach(p => ctx.lineTo(...p));
+  ctx.closePath(); ctx.fillStyle = relleno; ctx.fill();
+  if (borde) { ctx.strokeStyle = borde; ctx.lineWidth = 1.5; ctx.stroke(); }
+}
+function ojosFelices(cx, cy) {
+  ctx.beginPath(); ctx.arc(cx, cy + 2, 3.5, Math.PI * 1.15, Math.PI * 1.85);
+  ctx.strokeStyle = RAZA === 'labrador' ? '#d0d0d0' : '#222'; ctx.lineWidth = 2; ctx.stroke();
+}
+function corazon(cx, cy, s, alfa) {
+  ctx.save(); ctx.globalAlpha = alfa; ctx.fillStyle = COMUN.corazon;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + s * 0.3);
+  ctx.bezierCurveTo(cx - s, cy - s * 0.5, cx - s * 0.4, cy - s * 1.2, cx, cy - s * 0.5);
+  ctx.bezierCurveTo(cx + s * 0.4, cy - s * 1.2, cx + s, cy - s * 0.5, cx, cy + s * 0.3);
+  ctx.fill(); ctx.restore();
+}
+function recortarElipse(cx, cy, rx, ry, dibujo) {
+  ctx.save(); ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.clip(); dibujo(); ctx.restore();
+}
+
+// =====================================================================
+// 8) ACCESORIOS según la fecha (o el que elijas en Ajustes)
+// =====================================================================
+function accesorioActual() {
+  if (cumple) return 'fiesta';                                          // ¡su cumpleaños!
+  const halloweenDona = 'gorro_calabaza';                               // gorrito de calabaza 🎃
+  if (config.accesorio === 'halloween') return PRINCIPAL ? 'bruja' : halloweenDona;
+  if (config.accesorio && config.accesorio !== 'auto') return config.accesorio;
+  const d = new Date(), m = d.getMonth() + 1, dia = d.getDate();
+  if (m === 9) return 'patrio';                                        // Fiestas Patrias
+  if (m === 10) return PRINCIPAL ? 'bruja' : halloweenDona;            // Halloween todo octubre
+  if (m === 11 && dia <= 2) return 'muertos';
+  if (m === 12 || (m === 1 && dia <= 6)) return 'navidad';
+  return PRINCIPAL ? 'collar' : 'paliacate';
+}
+// Gorrito de calabaza 🎃: una calabacita con carita, sentada sobre la cabeza (cabeza en 88, 0)
+function dibujarGorroCalabaza() {
+  const cx = 88, cy = -9;
+  ctx.save();
+  const g = ctx.createRadialGradient(cx - 5, cy - 5, 2, cx, cy, 17);
+  g.addColorStop(0, '#ffb347'); g.addColorStop(0.7, '#f28c28'); g.addColorStop(1, '#d9661a');
+  [[-9, 9], [9, 9], [-4, 11], [4, 11], [0, 12]].forEach(([dx, rx]) => {            // gajos
+    ctx.beginPath(); ctx.ellipse(cx + dx, cy, rx, 10, 0, 0, Math.PI * 2);
+    ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = '#a84a0c'; ctx.lineWidth = 1.4; ctx.stroke();
+  });
+  ctx.fillStyle = '#5a3a12'; ctx.beginPath(); ctx.moveTo(cx - 2, cy - 9); ctx.lineTo(cx + 2, cy - 9);       // tallito
+  ctx.lineTo(cx + 3.5, cy - 15); ctx.lineTo(cx - 0.5, cy - 15.5); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#4caf50'; ctx.strokeStyle = '#2e7d32'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.ellipse(cx + 6, cy - 13, 5, 2.4, -0.4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();   // hojita
+  ctx.fillStyle = '#3b1d05';                                             // carita (simétrica, se ve igual de los dos lados)
+  [[-5, -2], [5, -2]].forEach(([dx, dy]) => { ctx.beginPath(); ctx.moveTo(cx + dx - 3, cy + dy + 2); ctx.lineTo(cx + dx + 3, cy + dy + 2); ctx.lineTo(cx + dx, cy + dy - 3); ctx.closePath(); ctx.fill(); });
+  ctx.beginPath(); ctx.moveTo(cx - 7, cy + 3); ctx.quadraticCurveTo(cx, cy + 9, cx + 7, cy + 3);
+  ctx.lineTo(cx + 4, cy + 4.5); ctx.lineTo(cx + 2, cy + 3.5); ctx.lineTo(cx, cy + 5); ctx.lineTo(cx - 2, cy + 3.5); ctx.lineTo(cx - 4, cy + 4.5); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+// Diadema con murcielaguito 🦇 (cabeza en 88, 0)
+function dibujarDiademaMurcielago() {
+  const cx = 88, aleteo = Math.sin(frame * 0.15) * 1.5;
+  ctx.save(); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(cx, 9, 14, Math.PI * 1.12, Math.PI * 1.88);   // la diadema
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 3; ctx.stroke();
+  trazo([[cx, -4], [cx, -8]], 1.5, '#111', false);                       // resorte
+  const y = -13;
+  ctx.fillStyle = '#1b1b1b'; ctx.strokeStyle = '#000'; ctx.lineWidth = 0.8;
+  [-1, 1].forEach(l => {                                                 // alas
+    ctx.beginPath(); ctx.moveTo(cx + l * 2, y - 1);
+    ctx.quadraticCurveTo(cx + l * 8, y - 7 - aleteo, cx + l * 15, y - 4 - aleteo);
+    ctx.quadraticCurveTo(cx + l * 13, y + 1, cx + l * 11, y + 3);
+    ctx.quadraticCurveTo(cx + l * 9, y + 1, cx + l * 7, y + 3);
+    ctx.quadraticCurveTo(cx + l * 5, y + 1, cx + l * 2, y + 3); ctx.closePath(); ctx.fill(); ctx.stroke();
+  });
+  ctx.beginPath(); ctx.ellipse(cx, y + 1, 3.2, 4, 0, 0, Math.PI * 2); ctx.fill();         // cuerpito
+  ctx.beginPath(); ctx.moveTo(cx - 2.5, y - 2); ctx.lineTo(cx - 1.5, y - 5.5); ctx.lineTo(cx - 0.5, y - 2.5); ctx.fill();   // orejitas
+  ctx.beginPath(); ctx.moveTo(cx + 2.5, y - 2); ctx.lineTo(cx + 1.5, y - 5.5); ctx.lineTo(cx + 0.5, y - 2.5); ctx.fill();
+  ctx.fillStyle = '#ffd23f'; [[-1.2, 0], [1.2, 0]].forEach(([dx]) => { ctx.beginPath(); ctx.arc(cx + dx, y, 0.8, 0, Math.PI * 2); ctx.fill(); });
+  ctx.restore();
+}
+
+function dibujarAccesorioCabeza() {           // mismo dibujo, con la cabeza en (88, 0)
+  dibujarAccesorio(0, true);
+}
+function dibujarAccesorio(cy, sprite = false) {
+  const a = accesorioActual();
+  if (a === 'gorro_calabaza') { dibujarGorroCalabaza(); return; }
+  if (a === 'murcielago') { dibujarDiademaMurcielago(); return; }
+  if (sprite && a === 'calabaza') { trazo([[88, -1], [90, -9]], 4, '#4a7a2a', false); elipse(95, -8, 5, 2.5, '#5f9e34', '#3d6b1f', -0.4); return; }
+  if (sprite && (a === 'collar' || a === 'paliacate' || a === 'patrio')) cy -= 2;
+  const acostado = ['dormir', 'acurrucado', 'triste', 'estirar'].includes(estado);
+  if (acostado && ['collar', 'paliacate', 'patrio'].includes(a)) return;   // acostado no se le ve el cuello
+  if (a === 'collar') {
+    trazo([[70, cy + 26], [81, cy + 36]], 5, '#d7263d', false);
+    elipse(80, cy + 39, 3, 3, '#f4c542', '#b8901c');
+  } else if (a === 'paliacate' || a === 'patrio') {
+    const tri = [[66, cy + 26], [89, cy + 35], [76, cy + 49]];
+    ctx.save();
+    ctx.beginPath(); ctx.moveTo(...tri[0]); ctx.lineTo(...tri[1]); ctx.lineTo(...tri[2]); ctx.closePath(); ctx.clip();
+    if (a === 'patrio') {
+      [['#006847', 62], ['#ffffff', 70], ['#ce1126', 78]].forEach(([col, x0]) => { ctx.fillStyle = col; ctx.fillRect(x0, cy + 20, 9, 32); });
+    } else {
+      ctx.fillStyle = '#c8102e'; ctx.fillRect(60, cy + 20, 34, 32);
+      ctx.fillStyle = '#ffffff';
+      [[72, cy + 31], [79, cy + 34], [75, cy + 40], [70, cy + 36]].forEach(([px, py]) => { ctx.beginPath(); ctx.arc(px, py, 1.3, 0, Math.PI * 2); ctx.fill(); });
+    }
+    ctx.restore();
+    poligono(tri, 'rgba(0,0,0,0)', C.borde);
+  } else if (a === 'navidad') {
+    poligono([[71, cy + 4], [101, cy], [95, cy - 24]], '#d62828');
+    trazo([[70, cy + 4], [102, cy]], 6, '#ffffff', false);
+    elipse(95, cy - 24, 4, 4, '#ffffff', '#cccccc');
+  } else if (a === 'bruja') {                                          // sombrero de bruja
+    elipse(88, cy + 1, 22, 4.5, '#2b1d3a', '#120a1a');
+    poligono([[76, cy], [100, cy - 2], [97, cy - 22], [106, cy - 32], [92, cy - 26]], '#2b1d3a', '#120a1a');
+    poligono([[77, cy - 2], [99, cy - 4], [98.5, cy - 8], [78, cy - 6]], '#7b2cbf', null);
+    ctx.fillStyle = '#ffd23f'; ctx.fillRect(86, cy - 7, 5, 4);
+  } else if (a === 'calabaza') {                                       // tallito de calabaza en la cabeza
+    trazo([[88, cy - 1], [90, cy - 9]], 4, '#4a7a2a', false);
+    elipse(95, cy - 8, 5, 2.5, '#5f9e34', '#3d6b1f', -0.4);
+  } else if (a === 'fiesta') {                                         // gorrito de fiesta
+    poligono([[76, cy + 2], [98, cy - 1], [90, cy - 27]], '#ff4d9d', '#c2185b');
+    ctx.save(); ctx.beginPath(); ctx.moveTo(76, cy + 2); ctx.lineTo(98, cy - 1); ctx.lineTo(90, cy - 27); ctx.closePath(); ctx.clip();
+    ctx.fillStyle = '#ffd23f'; for (let k = 0; k < 4; k++) ctx.fillRect(70, cy - 24 + k * 7, 40, 2.5);
+    ctx.restore();
+    elipse(90, cy - 28, 3.5, 3.5, '#5bc0eb', '#2f8fb8');
+  } else if (a === 'muertos') {
+    [[73, cy + 5], [80, cy], [88, cy - 2], [96, cy], [102, cy + 4]].forEach(([px, py]) => {
+      elipse(px, py, 5, 5, '#ff9f1c', '#e07b00');
+      elipse(px, py, 1.8, 1.8, '#c1440e', null);
+    });
+  }
+}
+
+// =====================================================================
+// 9) POSES
+// =====================================================================
+function pose() {
+  const meneo = 0.3 + animo / 200;
+  const colaAnimo = animo < 30 || hambre > 85 ? 'abajo' : 'arriba';
+  const lengua = animo >= 30 || haceCalor();
+  const de_pie = { cuerpo: [24, 48, 88, 80], cy: 22, patas: 'caminar', velPatas: 0.4, cola: colaAnimo, meneo,
+                   ojos: 'abierto', lengua, oreja: 0.15 * Math.sin(frame * 0.4) };
+  const sentado = { cuerpo: [35, 46, 84, 90], cy: 14, patas: 'sentado', cola: colaAnimo, meneo, ojos: 'abierto', lengua, oreja: 0 };
+  const acostado = { cuerpo: [18, 66, 92, 94], cy: 58, patas: 'ninguna', cola: 'tendida', lengua: false };
+  switch (estado) {
+    case 'correr': case 'buscar': case 'traer':
+      return { ...de_pie, cy: 20, velPatas: 0.8, meneo: 0.8, oreja: -0.3 + 0.2 * Math.sin(frame * 0.8), lengua: !tienePelota };
+    case 'ir_comer': case 'ir_amigo': case 'ir_trepar':
+      return { ...de_pie, velPatas: 0.55, meneo: 0.6 };
+    case 'cola':    return { ...de_pie, velPatas: 0.9, meneo: 1, ojos: 'feliz' };
+    case 'pasear': case 'seguir': case 'ir_beber': case 'ir_cama': case 'ir_jalar': case 'pedir_salir_ir': case 'salir':
+      return { ...de_pie, velPatas: 0.5, meneo: 0.6 };
+    case 'celos': case 'perseguir_laser': case 'esconderse':
+      return { ...de_pie, cy: 20, velPatas: 0.85, meneo: 0.9, oreja: -0.3 + 0.2 * Math.sin(frame * 0.8) };
+    case 'buscar_amiga': case 'olfatear':
+      return { ...de_pie, cy: 34, velPatas: 0.35, meneo: 0.5, lengua: false, oreja: 0.4 };
+    case 'pata':    return { ...sentado, patas: 'pata', ojos: 'feliz', meneo: 0.8 };
+    case 'comer_galleta': return { ...sentado, galleta: frame % 30 < 22, ojos: 'feliz', lengua: false, meneo: 1 };
+    case 'beber':   return { cuerpo: [24, 48, 88, 80], cy: 44, patas: 'quieto', cola: 'arriba', meneo: 0.7, ojos: 'cerrado', lengua: frame % 20 < 12, oreja: 0.5 };
+    case 'roer':    return { cuerpo: [18, 66, 92, 94], cy: 48 + Math.sin(frame * 0.3) * 1.5, patas: 'ninguna', cola: 'tendida', ojos: 'feliz', lengua: false, oreja: 0.3, hueso: true };
+    case 'jalar':   return { ...de_pie, cy: 26, patas: 'jalar', meneo: 1, ojos: 'feliz', lengua: false, oreja: -0.2, cuerda: true };
+    case 'bano':    return { ...sentado, tina: true, sinPelos: true, ojos: frotado > 0 ? 'feliz' : 'abierto', meneo: 0.4, cola: 'abajo' };
+    case 'sacudirse': return { ...de_pie, patas: 'quieto', ojos: 'cerrado', meneo: 2, sinPelos: true };
+    case 'escondida': case 'pedir_salir': return { ...sentado, meneo: 0.2 };
+    case 'rodar':   return { cuerpo: [18, 66, 92, 94], cy: 58, patas: 'ninguna', cola: 'tendida', ojos: 'feliz', lengua: true, oreja: 0.2 };
+    case 'afuera':  return de_pie;
+    case 'sentado': return sentado;
+    case 'teclear': return { ...sentado, patas: 'teclear', meneo: 0.7, ojos: frame % 90 < 70 ? 'abierto' : 'feliz' };
+    case 'rascar':  return { ...sentado, rascar: true, ojos: 'feliz', lengua: true };
+    case 'comer':   return { cuerpo: [24, 48, 88, 80], cy: 44, patas: 'quieto', cola: 'arriba', meneo: 0.7,
+                             ojos: frame % 40 < 20 ? 'cerrado' : 'feliz', lengua: false, oreja: 0.5 };
+    case 'dormir':  return { ...acostado, ojos: 'cerrado', oreja: 0.2 };
+    case 'acurrucado': return { ...acostado, cuerpo: [26, 64, 90, 94], ojos: 'abierto', oreja: 0.4 };
+    case 'triste':  return { ...acostado, ojos: 'abierto', oreja: 0.5 };
+    case 'aire':    return { ...de_pie, patas: 'aire', meneo: 0.6, ojos: 'feliz', oreja: -0.6, lengua: !tienePelota };
+    case 'arrastrado': return { cuerpo: [35, 40, 84, 86], cy: 8, patas: 'colgando', cola: 'abajo', meneo: 0.3,
+                               ojos: 'abierto', lengua: false, oreja: 0.3 * Math.sin(frame * 0.3) };
+    case 'estirar': return { cuerpo: [22, 58, 86, 86], cy: 40, patas: 'estirar', cola: 'arriba', meneo: 0.2,
+                             ojos: 'cerrado', lengua: false, oreja: 0.3 };
+    default:        return de_pie;
+  }
+}
+
+// =====================================================================
+// 10) DIBUJAR AL PERRITO (se dibuja mirando a la derecha y se voltea)
+// =====================================================================
+function dibujarPerro(p) {
+  const c = p.cuerpo, cy = p.cy;
+  const gordura = 1 + Math.min(peso, 100) / 400;                        // las galletas se notan 🍪
+  const bx = (c[0] + c[2]) / 2, by = (c[1] + c[3]) / 2;
+  const brx = (c[2] - c[0]) / 2 * gordura, bry = (c[3] - c[1]) / 2 * (1 + (gordura - 1) / 2);
+  const m = 8 * Math.sin(frame * p.meneo);
+
+  // Cola (el schnauzer tiene colita corta)
+  if (RAZA === 'schnauzer') {
+    if (p.cola === 'tendida') trazo([[c[0] + 6, by + 2], [c[0] - 6, by + 6]], 6, C.pelo);
+    else if (p.cola === 'abajo') trazo([[c[0] + 6, c[1] + 12], [c[0] - 4, c[1] + 22]], 6, C.pelo);
+    else trazo([[c[0] + 6, c[1] + 10], [c[0] - 2 + m / 3, c[1] - 4], [c[0] - 3 + m / 2, c[1] - 12]], 6, C.pelo);
+  } else {
+    if (p.cola === 'tendida') trazo([[c[0] + 6, by + 4], [6, 92], [2, 86]], 6, C.pelo);
+    else if (p.cola === 'abajo') trazo([[c[0] + 6, c[1] + 12], [10, c[1] + 30 + m / 3], [8, c[1] + 44]], 6, C.pelo);
+    else trazo([[c[0] + 6, c[1] + 10], [8, c[1] - 4 + m], [4 + m / 2, c[1] - 18]], 6, C.pelo);
+  }
+
+  // Patas
+  const patas = [34, 46, 66, 78];
+  if (p.patas === 'caminar') patas.forEach((px, i) => {
+    const paso = 5 * Math.sin(frame * p.velPatas + (i % 2) * Math.PI);
+    trazo([[px, 72], [px + paso, 94]], 7, C.patas);
+  });
+  else if (p.patas === 'quieto') patas.forEach(px => trazo([[px, 72], [px, 94]], 7, C.patas));
+  else if (p.patas === 'aire') patas.forEach(px => trazo([[px, 72], [px - 6, 90]], 7, C.patas));
+  else if (p.patas === 'sentado') [58, 72].forEach(px => trazo([[px, 72], [px, 94]], 7, C.patas));
+  else if (p.patas === 'teclear') [58, 72].forEach((px, i) => {
+    const arriba = Math.floor(frame / 8) % 2 === i;          // patitas alternadas, como tecleando
+    trazo([[px, 72], arriba ? [px + 7, 84] : [px, 94]], 7, C.patas);
+  });
+  else if (p.patas === 'colgando') [58, 72].forEach(px => trazo([[px, 72], [px, 100]], 7, C.patas));
+  else if (p.patas === 'pata') {                                       // da la patita
+    trazo([[58, 72], [58, 94]], 7, C.patas);
+    trazo([[72, 72], [90 + Math.sin(frame * 0.2) * 2, 62]], 7, C.patas);
+  }
+  else if (p.patas === 'jalar') patas.forEach((px, i) => trazo([[px, 72], [px - 8, 94]], 7, C.patas));
+  else if (p.patas === 'estirar') {
+    trazo([[34, 76], [34, 94]], 7, C.patas); trazo([[46, 76], [46, 94]], 7, C.patas);
+    trazo([[72, 78], [100, 94]], 7, C.patas); trazo([[80, 78], [110, 94]], 7, C.patas);
+  }
+
+  if (p.rascar) trazo([[46, 80], [70 + 4 * Math.sin(frame * 1.2), cy + 26]], 7, C.patas);
+
+  // Cuerpo
+  elipse(bx, by, brx, bry, C.pelo);
+  recortarElipse(bx, by, brx - 1, bry - 1, () => {
+    if (llueve()) {                                         // impermeable amarillo
+      ctx.fillStyle = '#f6c90e'; ctx.fillRect(c[0], c[1], c[2] - c[0], c[3] - c[1]);
+      ctx.fillStyle = '#d9a908'; ctx.fillRect(bx - 2, c[1], 3, c[3] - c[1]);
+    } else if (haceFrio()) {                                // suéter a rayas
+      ctx.fillStyle = '#2a6f97'; ctx.fillRect(c[0], c[1], c[2] - c[0], c[3] - c[1]);
+      ctx.fillStyle = '#ffffff';
+      for (let yy = c[1] + 6; yy < c[3]; yy += 10) ctx.fillRect(c[0], yy, c[2] - c[0], 3);
+    } else if (accesorioActual() === 'calabaza') {          // disfraz de calabaza
+      ctx.fillStyle = '#f28c28'; ctx.fillRect(c[0] - 20, c[1] - 10, c[2] - c[0] + 40, c[3] - c[1] + 20);
+      ctx.strokeStyle = '#c4661a'; ctx.lineWidth = 2;
+      for (let k = -2; k <= 2; k++) { ctx.beginPath(); ctx.ellipse(bx + k * 12, by, 6, bry, 0, 0, Math.PI * 2); ctx.stroke(); }
+    } else {
+      if (RAZA === 'schnauzer') {                           // pelo sal y pimienta
+        ctx.fillStyle = C.manchas;
+        for (let i = 0; i < 18; i++) {
+          const px = c[0] + ((i * 23) % (c[2] - c[0])), py = c[1] + ((i * 13) % (c[3] - c[1]));
+          ctx.beginPath(); ctx.arc(px, py, 1.6, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+      elipse(c[2] - 10, by + 6, 14, 17, C.pecho, null);    // pecho
+    }
+    // Lodo: más manchitas mientras más sucia está
+    if (suciedad > 35) {
+      const manchas = Math.min(6, Math.floor((suciedad - 35) / 11) + 1);
+      ctx.fillStyle = 'rgba(110,75,40,0.88)';
+      [[0.3, 0.4, 6, 4], [0.65, 0.7, 5, 3.5], [0.45, 0.8, 4, 3], [0.8, 0.35, 4.5, 3], [0.2, 0.75, 3.5, 3], [0.55, 0.25, 3, 2.5]]
+        .slice(0, manchas).forEach(([fx, fy, rx, ry]) => {
+          ctx.beginPath(); ctx.ellipse(bx - brx + fx * brx * 2, by - bry + fy * bry * 2, rx, ry, 0.3, 0, Math.PI * 2); ctx.fill();
+        });
+    }
+  });
+  // Despeinada si no la cepillas
+  if (desalino > 60 && !p.sinPelos) {
+    ctx.strokeStyle = C.pelo; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    for (let k = 0; k < 6; k++) {
+      const px = bx - brx * 0.7 + k * brx * 0.28, py = by - bry + 1;
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + (k % 2 ? 3 : -3), py - 5 - (k % 3)); ctx.stroke();
+    }
+  }
+  if (suciedad > 60 && ['caminar', 'sentado', 'aire'].includes(estado) && frame % 120 < 4) {
+    brillos.push({ x: OX + 60 + Math.random() * 40, y: OY + 30, vida: 40, mosca: true });   // una mosquita 🪰
+  }
+
+  // Cabeza
+  if (RAZA === 'schnauzer') dibujarCabezaSchnauzer(p, cy);
+  else dibujarCabezaLabrador(p, cy);
+
+  // Capucha del impermeable o accesorio
+  if (llueve()) {
+    ctx.beginPath(); ctx.ellipse(86, cy + 10, 20, 15, 0, Math.PI, Math.PI * 2); ctx.closePath();
+    ctx.fillStyle = '#f6c90e'; ctx.fill(); ctx.strokeStyle = '#b88c06'; ctx.lineWidth = 1.5; ctx.stroke();
+  } else dibujarAccesorio(cy);
+
+  // Lo que trae en el hocico
+  if (p.hueso) {
+    trazo([[100, cy + 31], [122, cy + 31]], 5, '#f5f0e1', false);
+    [[99, cy + 28], [99, cy + 34], [123, cy + 28], [123, cy + 34]].forEach(([hx, hy]) => elipse(hx, hy, 3.5, 3.5, '#f5f0e1', '#c9bfa5'));
+  }
+  if (p.galleta) {
+    elipse(112, cy + 31, 6, 6, '#c68642', '#8b5a2b');
+    [[110, cy + 29], [114, cy + 33]].forEach(([gx, gy]) => elipse(gx, gy, 1.2, 1.2, '#4e2a12', null));
+  }
+  if (p.cuerda) trazo([[110, cy + 31], [124, cy + 33]], 4, '#e63946', false);
+  if (p.tina) {                                                         // tina de baño
+    ctx.save(); ctx.globalAlpha = 0.95;
+    poligono([[22, 70], [112, 70], [104, 98], [30, 98]], '#e9f4fb', '#8fb8d1');
+    elipse(67, 70, 46, 6, '#cfe8f7', '#8fb8d1');
+    ctx.restore();
+  }
+
+  // Pelota en el hocico
+  if (tienePelota) {
+    elipse(113, cy + 30, 8, 8, '#d4ec4a', '#8fa51f');
+    ctx.beginPath(); ctx.arc(106, cy + 30, 6, -0.9, 0.9); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+}
+
+function dibujarOjo(p, ex, ey, rx, ry) {
+  const parpadea = frame % 150 < 6;
+  if (p.ojos === 'x') {
+    trazo([[ex - 3, ey - 3], [ex + 3, ey + 3]], 2, '#bbbbbb', false);
+    trazo([[ex - 3, ey + 3], [ex + 3, ey - 3]], 2, '#bbbbbb', false);
+    return;
+  }
+  if (p.ojos === 'cerrado' || (p.ojos === 'abierto' && parpadea)) trazo([[ex - 4, ey], [ex + 4, ey]], 2, '#8a8a8a', false);
+  else if (p.ojos === 'feliz') ojosFelices(ex, ey);
+  else {
+    if (RAZA === 'labrador') elipse(ex, ey, 4, 4.5, '#f2f2f2', null);
+    elipse(ex + 1, ey, rx, ry, C.ojo, null);
+    elipse(ex + 2, ey - 1.5, 1, 1, '#ffffff', null);
+  }
+}
+
+function dibujarCabezaLabrador(p, cy) {
+  elipse(86, cy + 17, 18, 17, C.pelo);
+  elipse(104, cy + 24, 12, 8, C.pelo);
+  elipse(114, cy + 21, 4, 3.2, '#000', null);
+  elipse(113, cy + 20, 1.2, 1, '#ffffff', null);
+  if (p.lengua && !tienePelota) {
+    const j = 1.5 * Math.sin(frame * 0.3);
+    elipse(104, cy + 34 + j, 3.5, 5 + j / 2, COMUN.lengua, COMUN.lenguaBorde);
+  }
+  dibujarOjo(p, 92, cy + 13, 2.8, 3.2);
+  elipse(76, cy + 14, 6.5, 14, C.oreja, C.borde, 0.35 + p.oreja);
+}
+
+function dibujarCabezaSchnauzer(p, cy) {
+  elipse(86, cy + 16, 16, 15, C.pelo);
+  elipse(104, cy + 22, 13, 7, C.pelo);
+  if (p.lengua && !tienePelota) {
+    const j = 1.2 * Math.sin(frame * 0.3);
+    elipse(106, cy + 38 + j, 3, 4, COMUN.lengua, COMUN.lenguaBorde);
+  }
+  const esponjada = desalino > 60 ? 5 : 0;
+  poligono([[93, cy + 24], [117 + esponjada / 2, cy + 24], [115 + esponjada, cy + 36], [104, cy + 40 + esponjada], [93 - esponjada / 2, cy + 35]], C.claro);   // barba
+  elipse(116, cy + 19, 3.8, 3, '#000', null);
+  dibujarOjo(p, 92, cy + 13, 2.4, 2.6);
+  poligono([[85, cy + 9], [101, cy + 6], [98, cy + 12]], C.claro);                                   // cejas
+  ctx.save();                                                                                         // oreja doblada
+  ctx.translate(84, cy + 4); ctx.rotate(p.oreja * 0.6);
+  poligono([[-8, 0], [4, -8], [6, 6]], C.oreja);
+  ctx.restore();
+}
+
+function dibujarPanza(muertita = false) {
+  const w = muertita ? 0 : 6 * Math.sin(frame * 0.5);
+  [[36, -1], [48, 1], [66, -1], [78, 1]].forEach(([px, s]) => trazo([[px, 72], [px + s * w * 0.6, 52]], 7, C.patas));
+  trazo([[26, 86], [RAZA === 'schnauzer' ? 16 : 8, 90 + w / 2], [RAZA === 'schnauzer' ? 14 : 2, 84]], 6, C.pelo);
+  elipse(57, 81, 33, 13, C.pelo);
+  recortarElipse(57, 81, 32, 12, () => elipse(62, 72, 24, 9, C.pecho, null));
+  elipse(97, 80, 16, 14, C.pelo);
+  elipse(108, 68, 7, 10, C.pelo, C.borde, 0.5);
+  if (RAZA === 'schnauzer') poligono([[102, 66], [116, 60], [118, 74], [108, 78]], C.claro);
+  elipse(112, 60, 3.2, 4, '#000', null);
+  elipse(117, 76, 3, 5, COMUN.lengua, COMUN.lenguaBorde, 0.6);
+  if (muertita) {
+    trazo([[95, 73], [101, 79]], 2, '#bbbbbb', false); trazo([[95, 79], [101, 73]], 2, '#bbbbbb', false);
+  } else ojosFelices(98, 76);
+  elipse(86, 90, 12, 5, C.oreja, C.borde, 0.1);
+}
+
+function dibujarBocadillo() {
+  cajaBocadillo = null;
+  if (!bocadillo) return;
+  if (Date.now() > bocadillo.hasta) { bocadillo = null; return; }
+  ctx.font = '13px "Segoe UI", sans-serif';
+  const palabras = bocadillo.texto.split(/\s+/);
+  let lineas = [], l = '';
+  for (const pal of palabras) {
+    const prueba = l ? l + ' ' + pal : pal;
+    if (ctx.measureText(prueba).width > 230 && l) { lineas.push(l); l = pal; } else l = prueba;
+  }
+  if (l) lineas.push(l);
+  if (lineas.length > 6) { lineas = lineas.slice(0, 6); lineas[5] += '…'; }
+  const ancho = Math.max(...lineas.map(t => ctx.measureText(t).width)) + 20;
+  const pista = bocadillo.accion === 'galleta' ? 'clic para darle galleta 🍪'
+              : bocadillo.accion === 'salir' ? 'clic para sacarla 🚪'
+              : bocadillo.accion === 'pasear' ? 'clic para salir a pasear 🐾'
+              : bocadillo.accion === 'comida' ? 'clic para servirnos también 🍖'
+              : bocadillo.fijo ? 'clic para cerrar' : null;
+  const alto = lineas.length * 17 + 14 + (pista ? 12 : 0);
+  const cx = spritesListos() ? 150 + dir * 25 : OX + 70 + (dir === 1 ? 10 : -10);
+  const bx = Math.min(Math.max(cx - ancho / 2, 4), W - ancho - 4);
+  const tope = spritesListos() && llueve() && sombrillaZona ? sombrillaZona.y - 6 : cajaPerro.y1 - (spritesListos() ? 30 : 0);
+  const by = Math.max(2, Math.min(OY + 20, tope) - alto - 10);
+  ctx.beginPath(); ctx.roundRect(bx, by, ancho, alto, 10);
+  ctx.moveTo(cx - 6, by + alto); ctx.lineTo(cx, by + alto + 9); ctx.lineTo(cx + 6, by + alto);
+  ctx.fillStyle = '#ffffff'; ctx.fill();
+  ctx.strokeStyle = '#4a4a4a'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.fillStyle = '#222';
+  lineas.forEach((t, i) => ctx.fillText(t, bx + 10, by + 20 + i * 17));
+  if (pista) {
+    ctx.fillStyle = bocadillo.accion ? '#9a5a2b' : '#888'; ctx.font = '10px "Segoe UI", sans-serif';
+    ctx.fillText(pista, bx + 10, by + alto - 7);
+  }
+  cajaBocadillo = { x: bx, y: by, w: ancho, h: alto };
+}
+
+function dibujar() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.globalAlpha = opacidad;
+  ctx.translate(OX + 10, OY + 20);
+  if (enCama && estado === 'dormir') ctx.translate(0, -12);           // arriba del cojín
+  let d = dir;
+  if (estado === 'cola') {
+    d = Math.floor(frame / 40) % 2 ? 1 : -1;
+    ctx.translate(0, -Math.abs(Math.sin(frame * 0.3)) * 6);
+  }
+  if (estado === 'rodar') { ctx.translate(60, 80); ctx.rotate((frame * 0.12) % (Math.PI * 2)); ctx.translate(-60, -80); }
+  if (estado === 'sacudirse') { ctx.translate(60, 94); ctx.rotate(Math.sin(frame * 1.1) * 0.12); ctx.translate(-60, -94); }
+  if (d === -1) { ctx.translate(120, 0); ctx.scale(-1, 1); }
+  if (RAZA === 'schnauzer') { ctx.translate(60, 94); ctx.scale(0.85, 0.85); ctx.translate(-60, -94); }   // es más chiquito
+  if (spritesListos()) { ctx.restore(); dibujarConTransicion(); }
+  else {
+    if (estado === 'panza') dibujarPanza();
+    else if (estado === 'muertita') dibujarPanza(true);
+    else dibujarPerro(pose());
+    ctx.restore();
+    cajaPerro = { x1: OX + 10, x2: OX + 132, y1: OY + 15, y2: OY + 118 }; bocaVentana = null;
+  }
+
+  // Cuerda: del hocico hasta el centro (la otra mitad la dibuja su amiga)
+  if (estado === 'jalar' && cuerdaJuego && bocaVentana) dibujarCuerda();
+  // Espuma del baño, gotas, brillos y mosquitas
+  espuma.forEach(e => { elipse(e.x, e.y, e.r, e.r, 'rgba(255,255,255,0.92)', 'rgba(190,220,240,0.9)'); });
+  gotas.forEach(g => { ctx.fillStyle = 'rgba(120,180,255,0.8)'; ctx.beginPath(); ctx.ellipse(g.x, g.y, 1.8, 3, 0, 0, Math.PI * 2); ctx.fill(); });
+  brillos.forEach(b => {
+    ctx.save(); ctx.globalAlpha = b.vida / 40;
+    if (b.mosca) { ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(b.x + Math.sin(b.vida * 0.6) * 6, b.y + Math.cos(b.vida * 0.4) * 4, 1.6, 0, Math.PI * 2); ctx.fill(); }
+    else { ctx.fillStyle = '#ffe066'; ctx.font = '12px sans-serif'; ctx.fillText('✦', b.x, b.y); }
+    ctx.restore();
+  });
+  confeti.forEach(c => { ctx.fillStyle = c.color; ctx.fillRect(c.x, c.y, 4, 2); });
+  dibujarMariposa();
+  // Temporada: hojitas, nieve o pétalos cerca de ellas
+  particulas.forEach(q => {
+    ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.giro);
+    if (q.tipo === 'hoja') { ctx.fillStyle = q.color; ctx.beginPath(); ctx.ellipse(0, 0, 4, 2, 0, 0, Math.PI * 2); ctx.fill(); }
+    else if (q.tipo === 'nieve') { ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI * 2); ctx.fill(); }
+    else { ctx.fillStyle = '#ffb3c6'; ctx.beginPath(); ctx.ellipse(0, 0, 3, 1.6, 0, 0, Math.PI * 2); ctx.fill(); }
+    ctx.restore();
+  });
+  if (fantasma) {                                         // fantasmita de Halloween 👻
+    ctx.save(); ctx.globalAlpha = Math.min(1, fantasma.vida / 60) * 0.85;
+    ctx.font = '22px sans-serif'; ctx.fillText('👻', fantasma.x, fantasma.y + Math.sin(frame * 0.08) * 4);
+    ctx.restore();
+  }
+
+  if (llueve()) {                                         // gotitas alrededor (la sombrilla las tapa)
+    ctx.strokeStyle = 'rgba(140,185,255,0.55)'; ctx.lineWidth = 1.5;
+    for (let i = 0; i < 14; i++) {
+      const gx = 40 + ((i * 53) % 220), gy = 20 + ((frame * 3 + i * 37) % (H - 30));
+      const z = spritesListos() && sombrillaZona;
+      if (z && gx > z.x1 && gx < z.x2 && gy > z.y) continue;
+      ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx - 2, gy + 7); ctx.stroke();
+    }
+  }
+  if (estado === 'dormir') {
+    const z = Math.floor(frame / 25) % 3;
+    ctx.fillStyle = COMUN.z; ctx.font = `bold ${11 + z * 3}px sans-serif`;
+    const zx = spritesListos() ? 150 + dir * 70 : OX + (dir === 1 ? 118 : 24), zy = spritesListos() ? cajaPerro.y1 - 4 : OY + 80;
+    ctx.fillText('z'.repeat(z + 1), zx, zy - z * 9);
+  }
+  corazones.forEach(h => corazon(h.x, h.y, 7, h.vida / 60));
+
+  if (pomodoro && !bocadillo && PRINCIPAL) {
+    const s = Math.ceil(pomodoro.restante / 1000);
+    const txt = `${pomodoro.fase === 'trabajo' ? '🍅' : '☕'} ${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    ctx.font = 'bold 12px "Segoe UI", sans-serif'; ctx.textAlign = 'center';
+    ctx.lineWidth = 3; ctx.strokeStyle = '#1c1c1c'; ctx.strokeText(txt, OX + 70, OY + 18);
+    ctx.fillStyle = '#ffffff'; ctx.fillText(txt, OX + 70, OY + 18);
+    ctx.textAlign = 'start';
+  }
+  dibujarBocadillo();
+}
+
+// =====================================================================
+// 11) MOUSE
+// =====================================================================
+function sobrePelota(px, py) {                  // coordenadas locales de esta ventana
+  if (!pelota || pelota.portador) return false;
+  const dx = pelota.x - (x + px), dy = pelota.y - (y + py);
+  return dx * dx + dy * dy < 28 * 28;
+}
+function sobreMascota(px, py) {
+  if (opacidad < 0.3) return false;            // salió al baño
+  if (sobrePelota(px, py)) return false;        // deja que agarres la pelota aunque esté junto al perrito
+  if (px >= cajaPerro.x1 && px <= cajaPerro.x2 && py >= cajaPerro.y1 && py <= cajaPerro.y2) return true;
+  const b = cajaBocadillo;
+  return !!(b && px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h + 9);
+}
+function revisarPuntero(px, py) {
+  const sobre = !!arrastre || sobreMascota(px, py);
+  if (sobre && ignorando) { ignorando = false; window.mascota.ignorar(false); }
+  else if (!sobre && !ignorando) { ignorando = true; window.mascota.ignorar(true); }
+}
+window.addEventListener('mousemove', e => {
+  revisarPuntero(e.clientX, e.clientY);
+  const enPerrito = e.clientX >= cajaPerro.x1 && e.clientX <= cajaPerro.x2 && e.clientY >= cajaPerro.y1 && e.clientY <= cajaPerro.y2;
+  const antes = ultimoMouse; ultimoMouse = { x: e.clientX, y: e.clientY };
+  if (!enPerrito || !antes || arrastre) return;
+  const dist = Math.hypot(e.clientX - antes.x, e.clientY - antes.y);
+  if (dist > 60) return;
+  if (estado === 'bano') {                                // tallar con espuma
+    frotado += dist;
+    if (dist > 2 && espuma.length < 70)
+      espuma.push({ x: e.clientX + (Math.random() - 0.5) * 12, y: e.clientY + (Math.random() - 0.5) * 12, r: 3 + Math.random() * 4 });
+  } else if (!ocupada() && estado !== 'dormir') {         // cepillar
+    cepillado += dist;
+    if (dist > 3 && Math.random() < 0.15) brillos.push({ x: e.clientX, y: e.clientY, vida: 30 });
+    if (cepillado > 1800) {
+      cepillado = 0; desalino = 0;
+      window.mascota.evento({ tipo: 'cepillada' });
+      animo = Math.min(100, animo + 8);
+      if (Date.now() - ultimoCepillado > 2 * 60e3) { ultimoCepillado = Date.now(); decir(azar(['¡Qué rico! ✨', 'Mmm, qué buen cepillado 😌', '¡Quedé bien bonita! ✨']), 2500); }
+    }
+  }
+});
+document.addEventListener('mouseleave', () => { if (!arrastre) revisarPuntero(-1, -1); });
+
+canvas.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  const b = cajaBocadillo;
+  if (b && e.clientX >= b.x && e.clientX <= b.x + b.w && e.clientY >= b.y && e.clientY <= b.y + b.h) {
+    const accion = bocadillo && bocadillo.accion;
+    bocadillo = null;
+    if (accion === 'galleta') darGalleta();
+    else if (accion === 'pasear') window.mascota.pedirPasear();
+    else if (accion === 'comida') window.mascota.pedirComida();
+    else if (accion === 'salir') salirAlBano();
+    return;
+  }
+  if (['bano', 'sacudirse', 'salir', 'afuera'].includes(estado)) return;
+  canvas.setPointerCapture(e.pointerId);
+  arrastre = { dx: e.screenX - x, dy: e.screenY - y, sx: e.screenX, sy: e.screenY, movio: false };
+});
+canvas.addEventListener('pointermove', e => {
+  if (!arrastre) return;
+  if (Math.abs(e.screenX - arrastre.sx) + Math.abs(e.screenY - arrastre.sy) > 4) {
+    if (!arrastre.movio && tienePelota) soltarPelota(false);
+    arrastre.movio = true;
+  }
+  if (arrastre.movio) { estado = 'arrastrado'; x = e.screenX - arrastre.dx; y = e.screenY - arrastre.dy; }
+});
+canvas.addEventListener('pointerup', () => {
+  if (!arrastre) return;
+  const movio = arrastre.movio;
+  arrastre = null;
+  if (movio) { estado = 'aire'; vy = 0; vxAire = 0; soloPiso = false; return; }
+  if (clicPendiente) {                                  // doble clic = chat
+    clearTimeout(clicPendiente); clicPendiente = null;
+    dormidoPorInactividad = false;
+    cambiar('sentado', seg(6));
+    decir(PRINCIPAL ? '¿Platicamos? 🐶' : `Te paso con ${config.nombre} 🐶`, 2500);
+    window.mascota.abrirPanel('chat');
+    return;
+  }
+  clicPendiente = setTimeout(() => { clicPendiente = null; caricia(); }, 280);
+});
+function caricia() {
+  const eraPanza = estado === 'panza';
+  window.mascota.evento({ tipo: 'caricia' });
+  if (cumple) lanzarConfeti(15);
+  enCama = false;
+  animo = Math.min(100, animo + 12);
+  dormidoPorInactividad = false;
+  vy = -10 - animo / 10; vxAire = 3 * dir * VELOCIDAD;
+  lanzarCorazones(eraPanza ? 6 : 3);
+  if (Math.random() < 0.5) ladrar(1);
+  if (eraPanza) decir('¡Más, más! 🥰', 2500);
+  estado = 'aire';
+}
+canvas.addEventListener('contextmenu', e => { e.preventDefault(); window.mascota.menu(); });
+
+// =====================================================================
+// 12) MENSAJES DEL PROCESO PRINCIPAL
+// =====================================================================
+const m = window.mascota;
+m.on('tick', d => {
+  if (cursorAntes && Math.abs(d.cursor.x - cursorAntes.x) + Math.abs(d.cursor.y - cursorAntes.y) > 2)
+    cursorMovidoHasta = Date.now() + 1500;
+  cursorAntes = cursor = d.cursor;
+  if (!arrastre) revisarPuntero(cursor.x - x, cursor.y - y);
+
+  repisas = d.repisas || [];
+  otros = d.otros || [];
+  pelota = d.pelota;
+  if (!pelota) tienePelota = false;
+  plato = d.plato;
+  if (!plato) yaComio = false;
+  hambre = d.hambre;
+  escribiendo = d.escribiendo;
+  sed = d.sed; suciedad = d.suciedad; desalino = d.desalino; peso = d.peso;
+  necesidad = d.necesidad && !['salir', 'afuera'].includes(estado);
+  cumple = d.cumple; cumpleAmiga = d.cumpleAmiga; favorito = d.favorito;
+  agua = d.agua; cama = d.cama; laser = d.laser; charco = d.charco;
+
+  idle = d.idle;
+  if (idle >= config.inactividadMin * 60 && !dormidoPorInactividad && !trabajando() && estado !== 'arrastrado') {
+    dormidoPorInactividad = true;
+    if (tienePelota) soltarPelota(false);
+    if (estado !== 'aire') cambiar('dormir', 1e9);
+  }
+  if (dormidoPorInactividad && idle < 2) {
+    dormidoPorInactividad = false;
+    saludar('');                                                    // el saludo con palabras llega con la bienvenida
+  }
+});
+m.on('pantallas', p => { displays = p; });
+m.on('truco', hacerTruco);
+m.on('galleta', darGalleta);
+m.on('hueso', darHueso);
+m.on('banar', empezarBano);
+m.on('salir', salirAlBano);
+m.on('pasear', p => { prepararAccion(); paseo = { ...p, fase: 0 }; if (!ocupada()) cambiar('pasear', 1e9); });
+m.on('seguir', quien => { prepararAccion(); siguiendoA = quien; if (!ocupada()) cambiar('seguir', 1e9); });
+m.on('cuerda', d => { prepararAccion(); cuerdaJuego = { ...d, lado: centroX() < d.medio ? 1 : -1 }; if (!ocupada()) cambiar('ir_jalar', seg(20)); });
+m.on('escondidas', d => {
+  prepararAccion();
+  escondite = { ...d, limite: Date.now() + 45000, olfatearHasta: Date.now() + 9000 };
+  if (d.rol === 'buscar') { decir('¡Voy a contar! 1, 2, 3… 🙈', 3500); if (!ocupada()) cambiar('buscar_amiga', 1e9); }
+  else if (!ocupada()) cambiar('esconderse', 1e9);
+});
+m.on('fin-actividad', () => {
+  siguiendoA = null;
+  if (estado === 'buscar_amiga') { escondite = null; cambiar('sentado', seg(3)); }
+  if (estado === 'seguir') cambiar('sentado', seg(3));
+  if (estado === 'escondida' || estado === 'esconderse') {
+    escondite = null; decir('¡Me encontraste! 🙈', 2500); brincar(9); lanzarCorazones(3);
+  }
+});
+m.on('bienvenida', d => {
+  if (trabajando() || estado === 'arrastrado') return;
+  dormidoPorInactividad = false; enCama = false;
+  const min = d.min;
+  if (min >= 480) {                                                   // más de 8 horas: ¡fiesta!
+    if (PRINCIPAL) decir(azar(['¡Te extrañé muchísimo! 🥺💕', '¡Por fin llegaste! 🥺💕']), 6000);
+    else setTimeout(() => decir('¡Wuf wuf! 💕', 3000), 1200);
+    ladrar(3, true); lanzarCorazones(8); brincar(14); setTimeout(() => brincar(12), 900);
+  } else if (min >= 60) {
+    if (PRINCIPAL) decir(azar(['¡Volviste! 🐾 Te estábamos esperando', '¡Ya llegaste! 🐾']), 5000);
+    ladrar(2, true); lanzarCorazones(4); brincar(11);
+  } else {
+    if (PRINCIPAL) decir(azar(['¡Hola de nuevo! 🐾', '¡Ahí estás! 🐾']), 3000);
+    cambiar('cola', seg(2));
+  }
+  if (PRINCIPAL && d.nota) setTimeout(() => decir(d.nota, 0, true), min >= 480 ? 6500 : 5000);   // lo que hicieron
+});
+m.on('a-la-cama', () => {
+  if (!INTERRUMPIBLE.includes(estado) || trabajando() || estado === 'dormir') return;
+  if (enRepisa()) { bajarAlPiso(); return; }
+  cambiar('ir_cama', seg(30));
+});
+m.on('regalo-recibido', () => {
+  if (bocadillo && bocadillo.fijo) bocadillo = null;
+  decir(azar(['¡Te gustó! 💕', '¡De nada! 💕', '¡Sabía que te iba a gustar! 🐾']), 3000);
+  lanzarCorazones(6); ladrar(1); if (!ocupada()) brincar(10);
+});
+m.on('pedir-paseo', () => {
+  if (ocupada() || trabajando()) return;
+  dormidoPorInactividad = false;
+  decir(azar(['¡Buenos días! ¿Salimos a caminar? 🐾', '¡Qué bonita mañana! ¿Vamos a pasear? ☀️']), 0, true, 'pasear');
+  ladrar(2); brincar(9); cambiar('sentado', seg(30));
+});
+m.on('hora-comida', d => {
+  if (ocupada() || trabajando()) return;
+  dormidoPorInactividad = false;
+  const quien = d && d.dueno ? `, ${d.dueno}` : '';
+  if (PRINCIPAL) decir(`¡Hora de comer${quien}! 🍽️ Buen provecho`, 0, true, 'comida');
+  else setTimeout(() => decir('¡Comida! 🍖', 3000), 1500);
+  ladrar(2); lanzarConfeti(20); cambiar('celebrar', seg(4));
+});
+m.on('celos', () => { if (INTERRUMPIBLE.includes(estado) && !trabajando()) cambiar('celos', seg(10)); });
+m.on('config', c => { config = c; });
+m.on('clima', c => { clima = c; });
+m.on('dormir', () => cambiar('dormir', seg(60)));
+m.on('despedida', () => decir('¡Adiós! 👋', 2000));
+m.on('te-invitan', () => {
+  if (!['caminar', 'sentado', 'rascar', 'cola', 'triste', 'estirar', 'panza'].includes(estado) || trabajando()) return;
+  const amigo = otros[0];
+  if (amigo) voltear(amigo.x > x ? 1 : -1, true);
+  brincar(9); lanzarCorazones(3); animo = Math.min(100, animo + 5);
+});
+m.on('aviso', a => {
+  decir(a.texto, a.ms || 5000, !!a.fijo);
+  if (a.ladrar) ladrar(2, true);
+  if (estado === 'dormir' && a.fijo && !trabajando()) { dormidoPorInactividad = false; cambiar('sentado', seg(5)); }
+});
+m.on('reaccion', r => {
+  decir(r.texto, 9000);
+  animo = Math.min(100, animo + 3);
+  if (estado !== 'aire' && estado !== 'arrastrado') cambiar('sentado', seg(6));
+});
+m.on('pomodoro', p => {
+  pomodoro = p;
+  if (trabajando() && !['dormir', 'aire', 'arrastrado'].includes(estado)) {
+    if (tienePelota) soltarPelota(false);
+    cambiar('dormir', seg(10));
+  }
+  if (p && p.fase === 'descanso' && estado === 'dormir') cambiar('cola', seg(3));
+});
+
+// =====================================================================
+// 13) ARRANQUE
+// =====================================================================
+Promise.all([m.pantallas(), m.config(), m.clima()]).then(([p, c, cl]) => {
+  displays = p; config = c; clima = cl;
+  x = window.screenX;
+  const d = pantallaEn(x + OX + 70) || p[0];
+  y = d.y + d.height - H;
+  decir(PRINCIPAL ? `¡Hola! Soy ${config.nombre} 🐶` : `¡Hola! Soy ${config.nombreAmigo} 🐾`, 4000);
+  requestAnimationFrame(actualizar);
+});
+</script>
+</body>
+</html>
